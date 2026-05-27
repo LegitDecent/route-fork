@@ -1,7 +1,7 @@
 # proxy-manager
 
 > **Putting it plainly: this tool can MANAGE to take down servers.**
-> It routes scans through proxy pools and can slow loris, overwhelm SNAT, and generate DoS-level traffic if misused.
+> It routes scans through proxy pools and can flood connections, overwhelm SNAT, and generate DoS-level traffic if misused.
 > **Use it only on systems you own or have explicit written permission to test. Don't be a moron.**
 
 A SOCKS4/5 proxy-aware port scanner with a GUI and a full nmap-compatible CLI.
