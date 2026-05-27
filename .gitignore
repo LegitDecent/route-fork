@@ -1,0 +1,14 @@
+# built binary
+proxy-manager
+proxy-manager.exe
+
+# Go build cache
+/vendor/
+
+# macOS
+.DS_Store
+
+# editor
+.idea/
+.vscode/
+*.swp

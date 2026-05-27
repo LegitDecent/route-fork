@@ -1,0 +1,174 @@
+.TH PROXY\-MANAGER 1 "2026" "proxy-manager" "User Commands"
+.SH NAME
+proxy\-manager \- SOCKS proxy\-aware port scanner with nmap integration
+.SH SYNOPSIS
+.B proxy\-manager
+\fB\-proxlist\fR \fIfile\fR
+\fB\-ip\fR \fItarget\fR
+[\fIoptions\fR]
+[\fInmap\-flags\fR...]
+.PP
+.B proxy\-manager
+\fBvalidate\fR [\fIflags\fR]
+.PP
+.B proxy\-manager
+\fBscan\fR [\fIflags\fR]
+.PP
+.B proxy\-manager
+[\fBman\fR|\fBhelp\fR]
+.SH DESCRIPTION
+.B proxy\-manager
+routes port scans through SOCKS4/SOCKS5 proxy pools.
+It starts a local SOCKS4 relay so that
+.BR nmap (1)
+can be used without proxychains or any other wrapper \(em just pass
+.B \-proxlist
+and
+.B \-ip
+and every other flag goes straight to nmap unchanged.
+.PP
+Running without arguments opens the graphical user interface.
+.SH OPTIONS
+.SS "Proxy-manager flags"
+.TP
+\fB\-proxlist\fR \fIfile\fR
+Proxy list file.  One entry per line.  Accepted formats:
+.nf
+  host:port
+  socks4://host:port
+  socks5://host:port
+  socks5://user:pass@host:port
+  host:port:user:pass
+.fi
+.TP
+\fB\-ip\fR \fItarget\fR
+Target host, IP address, or CIDR block (e.g.\& \fI192.168.1.0/24\fR).
+The target may also be given as a positional argument.
+Multiple \fB\-ip\fR flags or positional args scan multiple targets,
+each consuming the next proxy from the pool.
+.TP
+\fB\-p\fR \fIports\fR
+Port specification: \fI80,443\fR or \fI1\-1024\fR or \fI1\-65535\fR.
+Forwarded verbatim to nmap as well.
+.TP
+\fB\-out\fR \fIfile\fR
+Write results to this file.  Format is controlled by \fB\-type\fR.
+.TP
+\fB\-type\fR \fIfmt\fR
+Output format for \fB\-out\fR.  One of:
+.RS
+.TP
+\fBtxt\fR (default)
+Human\-readable table.
+.TP
+\fBjson\fR
+JSON array of objects: host, port, proto, service, version, proxy.
+.TP
+\fBxml\fR
+Simple XML grouped by host.
+.TP
+\fBcsv\fR
+Comma\-separated: host,port,proto,service,version,proxy.
+.RE
+.TP
+\fB\-tool\fR \fIname\fR
+Scanner backend.  \fBnmap\fR (default) or \fBbuiltin\fR (pure\-Go TCP connect).
+.TP
+\fB\-conc\fR \fIN\fR
+Concurrency for the built\-in scanner (default: 200).
+.TP
+\fB\-timeout\fR \fIsec\fR
+Connect timeout in seconds (default: 5).
+.TP
+\fB\-rotate\fR / \fB\-no\-rotate\fR
+Rotate proxy between targets (default: on).
+.TP
+\fB\-wrap\fR / \fB\-no\-wrap\fR
+Wrap pool when exhausted (default: on).
+.TP
+\fB\-nmap\-path\fR \fIpath\fR
+Absolute path to the nmap binary.
+Saved to \fI~/.config/proxymgr/config\fR for future runs.
+.SS "nmap pass-through"
+Every flag not listed above is forwarded to nmap unchanged.
+This includes \fB\-sV\fR, \fB\-sC\fR, \fB\-A\fR, \fB\-O\fR, \fB\-T4\fR,
+\fB\-Pn\fR, \fB\-\-script\fR, \fB\-oX\fR, and all others.
+Use \fB\-\-\fR to separate ambiguous flags if needed.
+.SH SUBCOMMANDS
+.TP
+.B validate
+Validate a list of proxies concurrently.
+.nf
+  proxy\-manager validate \-f proxies.txt \-o valid.txt \-t 100 \-T 10
+.fi
+.TP
+.B scan
+Legacy scan subcommand (nmap or built\-in).
+.nf
+  proxy\-manager scan \-pool valid.txt \-target host \-tool nmap
+.fi
+.TP
+.B man
+Print this man page to stdout.
+Pipe through \fBman \-l \-\fR to render it in a pager.
+.TP
+.B help
+Print the usage summary.
+.SH FILES
+.TP
+.I ~/.config/proxymgr/config
+Key\-value configuration file.  Currently stores \fBnmap_path\fR.
+.SH EXAMPLES
+.PP
+Scan common ports on a single host, detect service versions:
+.nf
+  proxy\-manager \-proxlist ~/proxies.txt \-ip 192.168.1.2 \-p 80,443 \-sV
+.fi
+.PP
+Scan a /24 with aggressive timing, save JSON output:
+.nf
+  proxy\-manager \-proxlist ~/proxies.txt \-ip 10.0.0.0/24 \-p 1\-1024 \-T4 \-A \\
+    \-type json \-out results.json
+.fi
+.PP
+Run NSE scripts, forward nmap XML to a file:
+.nf
+  proxy\-manager \-proxlist proxies.txt \-ip target.com \-sV \-\-script=vuln \\
+    \-oX nmap\-out.xml
+.fi
+.PP
+Use a custom nmap binary path (saves for future runs):
+.nf
+  proxy\-manager \-nmap\-path /opt/nmap/bin/nmap \-proxlist proxies.txt \-ip host
+.fi
+.PP
+Validate a proxy list and save live proxies:
+.nf
+  proxy\-manager validate \-f raw.txt \-o live.txt \-t 200 \-T 8
+.fi
+.SH INSTALLATION
+.SS "Building from source"
+.nf
+  git clone https://github.com/YOUR_USERNAME/proxy\-manager
+  cd proxy\-manager
+  make install        # builds and installs binary + man page
+.fi
+Or without make:
+.nf
+  go build \-o proxy\-manager .
+  install \-m755 proxy\-manager /usr/local/bin/
+  install \-m644 docs/proxy\-manager.1 /usr/local/share/man/man1/
+.fi
+.SS "nmap"
+nmap must be installed separately.
+.nf
+  macOS:    brew install nmap
+  Debian:   apt install nmap
+  Fedora:   dnf install nmap
+  Windows:  winget install nmap
+.fi
+.SH SEE ALSO
+.BR nmap (1),
+.BR proxychains (1)
+.SH BUGS
+Report issues at the project GitHub page.
