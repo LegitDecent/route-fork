@@ -13,7 +13,7 @@ jobs:
     name: Build ${{ matrix.suffix }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false   # let other platforms finish even if one fails
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -21,12 +21,9 @@ jobs:
             goarch: amd64
             suffix: linux-amd64
 
-          - os: macos-13        # Intel — native amd64
-            goos: darwin
-            goarch: amd64
-            suffix: macos-amd64
-
-          - os: macos-latest    # Apple Silicon — native arm64
+          # macos-latest is Apple Silicon (arm64).
+          # Intel Mac users can run this transparently via Rosetta 2.
+          - os: macos-latest
             goos: darwin
             goarch: arm64
             suffix: macos-arm64
@@ -49,11 +46,17 @@ jobs:
         if: matrix.goos == 'linux'
         run: sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
 
+      # Fyne needs GCC (MinGW) on Windows for CGO
+      - name: Add MinGW to PATH (Windows)
+        if: matrix.goos == 'windows'
+        run: echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
+        shell: bash
         run: |
           go build -trimpath -ldflags="-s -w" \
             -o proxy-manager-${{ matrix.suffix }}${{ matrix.ext || '' }} .
@@ -85,18 +88,14 @@ jobs:
 
             Download the binary for your platform from the **Assets** section below.
 
-            ### macOS
+            ### macOS (Apple Silicon + Intel via Rosetta 2)
             ```bash
-            # Apple Silicon (M1/M2/M3)
             chmod +x proxy-manager-macos-arm64
             sudo mv proxy-manager-macos-arm64 /usr/local/bin/proxy-manager
-
-            # Intel
-            chmod +x proxy-manager-macos-amd64
-            sudo mv proxy-manager-macos-amd64 /usr/local/bin/proxy-manager
             ```
+            Works natively on M1/M2/M3. Intel Macs run it automatically via Rosetta 2.
 
-            ### Linux
+            ### Linux (x86_64)
             ```bash
             chmod +x proxy-manager-linux-amd64
             sudo mv proxy-manager-linux-amd64 /usr/local/bin/proxy-manager
