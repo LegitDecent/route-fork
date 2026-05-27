@@ -3,21 +3,31 @@ BINDIR   = $(PREFIX)/bin
 MANDIR   = $(PREFIX)/share/man/man1
 BINARY   = proxy-manager
 MANSRC   = docs/proxy-manager.1
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: all build install install-bin install-man uninstall clean
+PLATFORMS = \
+  linux/amd64 \
+  linux/arm64 \
+  darwin/amd64 \
+  darwin/arm64 \
+  windows/amd64
+
+.PHONY: all build install install-bin install-man uninstall release clean
 
 all: build
 
 build:
-	go build -o $(BINARY) .
+	go build -trimpath -ldflags="-s -w" -o $(BINARY) .
 
+# install from local source (requires Go)
 install: build install-bin install-man
 	@echo ""
-	@echo "Installed $(BINARY) to $(BINDIR)/$(BINARY)"
-	@echo "Man page   installed at $(MANDIR)/$(BINARY).1"
+	@echo "  Installed $(BINARY) to $(BINDIR)/$(BINARY)"
+	@echo "  Man page at $(MANDIR)/$(BINARY).1"
 	@echo ""
-	@echo "Try: proxy-manager help"
-	@echo "     man proxy-manager"
+	@echo "  nmap is needed for nmap mode (built-in scanner needs nothing extra):"
+	@echo "    macOS:   brew install nmap"
+	@echo "    Linux:   apt/dnf install nmap"
 
 install-bin: build
 	install -d $(BINDIR)
@@ -32,5 +42,22 @@ uninstall:
 	rm -f $(MANDIR)/$(BINARY).1
 	@echo "Uninstalled."
 
+# build release binaries for all platforms into dist/
+release:
+	@mkdir -p dist
+	@for p in $(PLATFORMS); do \
+	  os=$$(echo $$p | cut -d/ -f1); \
+	  arch=$$(echo $$p | cut -d/ -f2); \
+	  out=dist/$(BINARY)-$${os}-$${arch}; \
+	  [ "$$os" = "windows" ] && out="$$out.exe"; \
+	  echo "  building $$os/$$arch → $$out"; \
+	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
+	    go build -trimpath -ldflags="-s -w" -o $$out . ; \
+	done
+	@echo ""
+	@echo "Release binaries in dist/:"
+	@ls -lh dist/
+
 clean:
 	rm -f $(BINARY)
+	rm -rf dist/
