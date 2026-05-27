@@ -1,111 +1,63 @@
 #!/usr/bin/env bash
-# install.sh — install proxy-manager (no Go required)
-# Downloads a pre-built binary from GitHub releases.
-# Falls back to building from source if Go is available and no release exists yet.
+# install.sh — build proxy-manager from source and install it.
+# Requires Go: https://go.dev/dl/
+#
+# For pre-built binaries (no Go needed) download from the releases page,
+# then follow the one-time steps printed at the end of this script.
 set -e
 
-REPO="LegitDecent/proxy-manager"
 PREFIX="${PREFIX:-/usr/local}"
 BINDIR="$PREFIX/bin"
 MANDIR="$PREFIX/share/man/man1"
-BINARY="proxy-manager"
 
-# ── detect OS / arch ──────────────────────────────────────────────────────────
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-
-case "$OS" in
-  Linux)  os="linux" ;;
-  Darwin) os="macos" ;;
-  *)
-    echo "Unsupported OS: $OS"
-    echo "Download a binary manually from: https://github.com/$REPO/releases"
-    exit 1
-    ;;
-esac
-
-case "$ARCH" in
-  x86_64|amd64) arch="amd64" ;;
-  arm64|aarch64) arch="arm64" ;;
-  *)
-    echo "Unsupported architecture: $ARCH"
-    exit 1
-    ;;
-esac
-
-ASSET="${BINARY}-${os}-${arch}"
-
-# ── fetch latest release tag ──────────────────────────────────────────────────
-echo "[*] Checking latest release..."
-LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-  | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
-
-if [ -z "$LATEST" ]; then
-  # No release yet — try building from source
-  if command -v go &>/dev/null; then
-    echo "[*] No release found. Building from source (Go $(go version | awk '{print $3}'))..."
-    go build -o "$BINARY" .
-    install_local=1
-  else
-    echo ""
-    echo "No pre-built release found and Go is not installed."
-    echo ""
-    echo "Options:"
-    echo "  1. Install Go from https://go.dev/dl/ then re-run this script"
-    echo "  2. Download a binary from: https://github.com/$REPO/releases"
-    exit 1
-  fi
-else
-  echo "[*] Latest release: $LATEST"
-  URL="https://github.com/$REPO/releases/download/$LATEST/$ASSET"
-  echo "[*] Downloading $ASSET..."
-  curl -fsSL -o "$BINARY" "$URL" || {
-    echo "[-] Download failed: $URL"
-    echo "    Try downloading manually from: https://github.com/$REPO/releases"
-    exit 1
-  }
-  chmod +x "$BINARY"
-  install_local=0
+if ! command -v go &>/dev/null; then
+  echo ""
+  echo "Go is not installed — can't build from source."
+  echo ""
+  echo "Download a pre-built binary for your platform from the releases page:"
+  echo "  https://github.com/LegitDecent/proxy-manager/releases"
+  echo ""
+  echo "Then install it with:"
+  echo "  chmod +x proxy-manager-<platform>"
+  echo "  sudo mv proxy-manager-<platform> $BINDIR/proxy-manager"
+  echo ""
+  exit 1
 fi
 
-# ── install binary ────────────────────────────────────────────────────────────
-echo "[*] Installing to $BINDIR/$BINARY"
-if [ ! -w "$BINDIR" ] 2>/dev/null; then
-  echo "    (needs sudo for $BINDIR)"
-  sudo install -d "$BINDIR"
-  sudo install -m 755 "$BINARY" "$BINDIR/$BINARY"
-else
+echo "[*] Building from source ($(go version | awk '{print $3}'))..."
+go build -trimpath -ldflags="-s -w" -o proxy-manager .
+
+echo "[*] Installing binary → $BINDIR/proxy-manager"
+if [ -w "$BINDIR" ]; then
   install -d "$BINDIR"
-  install -m 755 "$BINARY" "$BINDIR/$BINARY"
+  install -m 755 proxy-manager "$BINDIR/proxy-manager"
+else
+  sudo install -d "$BINDIR"
+  sudo install -m 755 proxy-manager "$BINDIR/proxy-manager"
 fi
 
-# ── install man page (if present) ────────────────────────────────────────────
 if [ -f "docs/proxy-manager.1" ]; then
-  echo "[*] Installing man page to $MANDIR/"
-  if [ ! -w "$MANDIR" ] 2>/dev/null; then
-    sudo install -d "$MANDIR"
-    sudo install -m 644 docs/proxy-manager.1 "$MANDIR/proxy-manager.1"
-  else
+  echo "[*] Installing man page → $MANDIR/proxy-manager.1"
+  if [ -w "$(dirname "$MANDIR")" ]; then
     install -d "$MANDIR"
     install -m 644 docs/proxy-manager.1 "$MANDIR/proxy-manager.1"
+  else
+    sudo install -d "$MANDIR"
+    sudo install -m 644 docs/proxy-manager.1 "$MANDIR/proxy-manager.1"
   fi
 fi
 
-# clean up downloaded binary if we fetched it
-[ "$install_local" = "0" ] && rm -f "$BINARY"
+rm -f proxy-manager
 
-# ── nmap notice ───────────────────────────────────────────────────────────────
 echo ""
-echo "  proxy-manager installed successfully."
+echo "  proxy-manager installed."
 echo ""
-echo "  The built-in TCP scanner works right now with no extra installs."
-echo "  For nmap mode, install nmap separately:"
+echo "  The built-in TCP scanner works right now — no extra installs needed."
+echo "  For nmap mode, install nmap:"
 echo "    macOS:          brew install nmap"
 echo "    Debian/Ubuntu:  sudo apt install nmap"
 echo "    Fedora:         sudo dnf install nmap"
+echo "    Windows:        winget install nmap"
 echo ""
-echo "  Quick start:"
-echo "    proxy-manager help"
-echo "    proxy-manager -proxlist proxies.txt -ip 192.168.1.1 -p 80,443"
-echo "    man proxy-manager"
+echo "  Try: proxy-manager help"
 echo ""

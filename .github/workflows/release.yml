@@ -73,18 +73,48 @@ jobs:
           body: |
             ## Install
 
-            **macOS / Linux** — no Go required:
+            Download the binary for your platform from the **Assets** section below.
+
+            ### macOS
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+            # Apple Silicon (M1/M2/M3)
+            chmod +x proxy-manager-macos-arm64
+            sudo mv proxy-manager-macos-arm64 /usr/local/bin/proxy-manager
+
+            # Intel
+            chmod +x proxy-manager-macos-amd64
+            sudo mv proxy-manager-macos-amd64 /usr/local/bin/proxy-manager
             ```
 
-            Or download the binary for your platform below and place it in `/usr/local/bin/`.
+            ### Linux
+            ```bash
+            # x86_64
+            chmod +x proxy-manager-linux-amd64
+            sudo mv proxy-manager-linux-amd64 /usr/local/bin/proxy-manager
 
-            **Windows** — download `proxy-manager-windows-amd64.exe` and add it to your PATH.
+            # ARM64
+            chmod +x proxy-manager-linux-arm64
+            sudo mv proxy-manager-linux-arm64 /usr/local/bin/proxy-manager
+            ```
+
+            ### Windows
+            Download `proxy-manager-windows-amd64.exe`, rename it to `proxy-manager.exe`,
+            and move it to a folder in your `PATH` (e.g. `C:\Windows\System32\`).
 
             ---
 
-            **nmap** is required for nmap scanning mode (the built-in scanner works without it):
+            ### Man page (macOS / Linux — optional)
+            ```bash
+            sudo install -m644 docs/proxy-manager.1 /usr/local/share/man/man1/
+            man proxy-manager
+            ```
+
+            ---
+
+            ### nmap
+            The **built-in TCP scanner works with no extra installs.**
+            nmap is only needed if you want to use nmap mode:
             - macOS: `brew install nmap`
-            - Debian/Ubuntu: `apt install nmap`
+            - Debian/Ubuntu: `sudo apt install nmap`
+            - Fedora: `sudo dnf install nmap`
             - Windows: `winget install nmap`
