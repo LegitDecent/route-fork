@@ -1,18 +1,18 @@
 # Route Fork
 
-> **Putting it plainly: this tool can MANAGE to take down servers.**
-> It routes scans through proxy pools and can flood connections, overwhelm SNAT, and generate DoS-level traffic if misused.
-> **Use it only on systems you own or have explicit written permission to test. Don't be a moron.**
+> **Putting it plainly: this tool can take down servers if you use it like an idiot.**
+> It routes scans through proxy pools and can overwhelm connection tracking, SNAT, or fragile services if misconfigured.
+> **Use it only on systems you own or have explicit written permission to test. Don't be stupid.**
 
 A SOCKS4/5 proxy-aware port scanner with a GUI and a full nmap-compatible CLI.
-Routes nmap (or its own built-in TCP scanner) through rotating proxy pools — no proxychains, no wrappers.
+Routes nmap (or its own built-in TCP scanner) through rotating proxy pools, no proxychains required.
 
 ---
 
 ## Features
 
 - **GUI** — proxy validator, scanner, Zenmap-style Hosts tab, real-time log
-- **CLI** — nmap-style flat interface; every flag you don't recognise passes straight through to nmap
+- **CLI** — nmap-style flat interface; unknown flags pass straight through to nmap in nmap mode
 - **nmap integration** — local SOCKS4↔SOCKS5 relay so nmap works without proxychains
 - **Built-in TCP scanner** — pure Go, zero dependencies, works when nmap isn't available
 - **Proxy rotation** — per-scan, per-port, or parallel chunk rotation across the pool
@@ -91,7 +91,7 @@ rofk -proxlist <file> -ip <target> [options] [nmap-flags...]
 # Service version detection
 rofk -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443 -sV
 
-# Aggressive scan of a /24, save JSON
+# Authorized Nmap aggressive scan (-A), save JSON
 rofk -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -T4 -A \
   -type json -out results.json
 
@@ -157,4 +157,4 @@ go build -o rofk .
 
 This tool is for **authorised security testing only**.  
 Scanning systems without explicit permission is illegal in most jurisdictions.  
-The authors take no responsibility for misuse.
+You are responsible for your own use. The authors are not responsible for misuse.
