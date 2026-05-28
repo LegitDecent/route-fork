@@ -59,13 +59,13 @@ jobs:
         shell: bash
         run: |
           go build -trimpath -ldflags="-s -w" \
-            -o proxy-manager-${{ matrix.suffix }}${{ matrix.ext || '' }} .
+            -o rofk-${{ matrix.suffix }}${{ matrix.ext || '' }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proxy-manager-${{ matrix.suffix }}
-          path: proxy-manager-${{ matrix.suffix }}${{ matrix.ext || '' }}
+          name: rofk-${{ matrix.suffix }}
+          path: rofk-${{ matrix.suffix }}${{ matrix.ext || '' }}
 
   release:
     needs: build
@@ -90,27 +90,27 @@ jobs:
 
             ### macOS (Apple Silicon + Intel via Rosetta 2)
             ```bash
-            chmod +x proxy-manager-macos-arm64
-            sudo mv proxy-manager-macos-arm64 /usr/local/bin/proxy-manager
+            chmod +x rofk-macos-arm64
+            sudo mv rofk-macos-arm64 /usr/local/bin/rofk
             ```
             Works natively on M1/M2/M3. Intel Macs run it automatically via Rosetta 2.
 
             ### Linux (x86_64)
             ```bash
-            chmod +x proxy-manager-linux-amd64
-            sudo mv proxy-manager-linux-amd64 /usr/local/bin/proxy-manager
+            chmod +x rofk-linux-amd64
+            sudo mv rofk-linux-amd64 /usr/local/bin/rofk
             ```
 
             ### Windows
-            Download `proxy-manager-windows-amd64.exe`, rename it to `proxy-manager.exe`,
+            Download `rofk-windows-amd64.exe`, rename it to `rofk.exe`,
             and move it to a folder in your `PATH` (e.g. `C:\Windows\System32\`).
 
             ---
 
             ### Man page (macOS / Linux — optional)
             ```bash
-            sudo install -m644 docs/proxy-manager.1 /usr/local/share/man/man1/
-            man proxy-manager
+            sudo install -m644 docs/rofk.1 /usr/local/share/man/man1/
+            man rofk
             ```
 
             ---

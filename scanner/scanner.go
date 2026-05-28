@@ -14,7 +14,7 @@ import (
 
 	xproxy "golang.org/x/net/proxy"
 
-	"proxymgr/proxy"
+	"rofk/proxy"
 )
 
 type Result struct {

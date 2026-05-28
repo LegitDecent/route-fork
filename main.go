@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"proxymgr/cli"
-	guiApp "proxymgr/gui"
+	"rofk/cli"
+	guiApp "rofk/gui"
 )
 
 func main() {

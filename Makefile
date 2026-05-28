@@ -1,8 +1,8 @@
 PREFIX  ?= /usr/local
 BINDIR   = $(PREFIX)/bin
 MANDIR   = $(PREFIX)/share/man/man1
-BINARY   = proxy-manager
-MANSRC   = docs/proxy-manager.1
+BINARY   = rofk
+MANSRC   = docs/rofk.1
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 PLATFORMS = \

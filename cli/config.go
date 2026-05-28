@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const cfgDirName = ".config/proxymgr"
+const cfgDirName = ".config/rofk"
 const cfgFileName = "config"
 
 func configFilePath() string {
@@ -18,7 +18,7 @@ func configFilePath() string {
 	return filepath.Join(home, cfgDirName, cfgFileName)
 }
 
-// LoadConfig reads key=value pairs from ~/.config/proxymgr/config.
+// LoadConfig reads key=value pairs from ~/.config/rofk/config.
 func LoadConfig() map[string]string {
 	m := make(map[string]string)
 	f, err := os.Open(configFilePath())
@@ -52,7 +52,7 @@ func SaveConfig(m map[string]string) error {
 	}
 	defer f.Close()
 	w := bufio.NewWriter(f)
-	fmt.Fprintln(w, "# proxymgr configuration — do not edit manually while the app is running")
+	fmt.Fprintln(w, "# rofk configuration — do not edit manually while the app is running")
 	for k, v := range m {
 		fmt.Fprintf(w, "%s = %s\n", k, v)
 	}

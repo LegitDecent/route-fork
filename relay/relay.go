@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"time"
 
-	"proxymgr/proxy"
+	"rofk/proxy"
 )
 
 // Relay is a running local SOCKS4 listener.

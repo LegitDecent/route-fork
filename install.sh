@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — build proxy-manager from source and install it.
+# install.sh — build rofk from source and install it.
 # Requires Go: https://go.dev/dl/
 #
 # For pre-built binaries (no Go needed) download from the releases page,
@@ -15,42 +15,42 @@ if ! command -v go &>/dev/null; then
   echo "Go is not installed — can't build from source."
   echo ""
   echo "Download a pre-built binary for your platform from the releases page:"
-  echo "  https://github.com/LegitDecent/proxy-manager/releases"
+  echo "  https://github.com/LegitDecent/route-fork/releases"
   echo ""
   echo "Then install it with:"
-  echo "  chmod +x proxy-manager-<platform>"
-  echo "  sudo mv proxy-manager-<platform> $BINDIR/proxy-manager"
+  echo "  chmod +x rofk-<platform>"
+  echo "  sudo mv rofk-<platform> $BINDIR/rofk"
   echo ""
   exit 1
 fi
 
 echo "[*] Building from source ($(go version | awk '{print $3}'))..."
-go build -trimpath -ldflags="-s -w" -o proxy-manager .
+go build -trimpath -ldflags="-s -w" -o rofk .
 
-echo "[*] Installing binary → $BINDIR/proxy-manager"
+echo "[*] Installing binary → $BINDIR/rofk"
 if [ -w "$BINDIR" ]; then
   install -d "$BINDIR"
-  install -m 755 proxy-manager "$BINDIR/proxy-manager"
+  install -m 755 rofk "$BINDIR/rofk"
 else
   sudo install -d "$BINDIR"
-  sudo install -m 755 proxy-manager "$BINDIR/proxy-manager"
+  sudo install -m 755 rofk "$BINDIR/rofk"
 fi
 
-if [ -f "docs/proxy-manager.1" ]; then
-  echo "[*] Installing man page → $MANDIR/proxy-manager.1"
+if [ -f "docs/rofk.1" ]; then
+  echo "[*] Installing man page → $MANDIR/rofk.1"
   if [ -w "$(dirname "$MANDIR")" ]; then
     install -d "$MANDIR"
-    install -m 644 docs/proxy-manager.1 "$MANDIR/proxy-manager.1"
+    install -m 644 docs/rofk.1 "$MANDIR/rofk.1"
   else
     sudo install -d "$MANDIR"
-    sudo install -m 644 docs/proxy-manager.1 "$MANDIR/proxy-manager.1"
+    sudo install -m 644 docs/rofk.1 "$MANDIR/rofk.1"
   fi
 fi
 
-rm -f proxy-manager
+rm -f rofk
 
 echo ""
-echo "  proxy-manager installed."
+echo "  rofk installed."
 echo ""
 echo "  The built-in TCP scanner works right now — no extra installs needed."
 echo "  For nmap mode, install nmap:"
@@ -59,5 +59,5 @@ echo "    Debian/Ubuntu:  sudo apt install nmap"
 echo "    Fedora:         sudo dnf install nmap"
 echo "    Windows:        winget install nmap"
 echo ""
-echo "  Try: proxy-manager help"
+echo "  Try: rofk help"
 echo ""

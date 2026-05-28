@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"proxymgr/pool"
-	"proxymgr/proxy"
-	"proxymgr/relay"
-	"proxymgr/scanner"
+	"rofk/pool"
+	"rofk/proxy"
+	"rofk/relay"
+	"rofk/scanner"
 )
 
 var openPortRE = regexp.MustCompile(`\d+/(tcp|udp)\s+open`)
@@ -26,9 +26,9 @@ var openPortRE = regexp.MustCompile(`\d+/(tcp|udp)\s+open`)
 const usage = `SOCKS Proxy Manager — CLI
 
 Usage:
-  proxy-manager validate [flags]
-  proxy-manager scan     [flags]
-  proxy-manager help
+  rofk validate [flags]
+  rofk scan     [flags]
+  rofk help
 
 Validate flags:
   -f  string   Input proxy file (default: stdin)

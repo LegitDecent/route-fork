@@ -1,4 +1,4 @@
-module proxymgr
+module rofk
 
 go 1.21
 

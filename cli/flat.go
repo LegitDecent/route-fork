@@ -14,18 +14,18 @@ import (
 	"syscall"
 	"time"
 
-	"proxymgr/pool"
-	"proxymgr/proxy"
-	"proxymgr/relay"
-	"proxymgr/scanner"
+	"rofk/pool"
+	"rofk/proxy"
+	"rofk/relay"
+	"rofk/scanner"
 )
 
-// flatArgs holds the proxy-manager-specific flags extracted from the CLI.
+// flatArgs holds the rofk-specific flags extracted from the CLI.
 // Everything not consumed here ends up in NmapExtra and is forwarded to nmap verbatim.
 type flatArgs struct {
 	proxList  string
 	targets   []string // one or more host/IP/CIDR targets
-	ports     string   // extracted from -p for proxymgr awareness; also forwarded to nmap
+	ports     string   // extracted from -p for rofk awareness; also forwarded to nmap
 	outFile   string
 	outType   string
 	tool      string
@@ -89,7 +89,7 @@ func parseFlatArgs(args []string) flatArgs {
 		}
 
 		switch {
-		// ── proxymgr-specific flags ────────────────────────────────────────
+		// ── rofk-specific flags ────────────────────────────────────────
 		case arg == "-proxlist" || arg == "--proxlist" || arg == "-pl" || arg == "--pl":
 			fa.proxList = consume()
 
@@ -97,7 +97,7 @@ func parseFlatArgs(args []string) flatArgs {
 			fa.targets = append(fa.targets, consume())
 
 		case arg == "-p" || arg == "--ports":
-			// extracted for proxymgr rotation awareness; also forwarded to nmap
+			// extracted for rofk rotation awareness; also forwarded to nmap
 			val := nextVal()
 			if val != "" && !strings.HasPrefix(val, "-") {
 				fa.ports = val
@@ -167,7 +167,7 @@ func RunFlatMode(args []string) {
 
 	if fa.proxList == "" {
 		fmt.Fprintln(os.Stderr, "error: -proxlist <file> is required")
-		fmt.Fprintln(os.Stderr, "Run: proxy-manager help")
+		fmt.Fprintln(os.Stderr, "Run: rofk help")
 		os.Exit(1)
 	}
 	if len(fa.targets) == 0 {
@@ -409,11 +409,11 @@ func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
 const flatUsage = `SOCKS Proxy Manager
 
 USAGE
-  proxy-manager -proxlist <file> -ip <target> [options] [nmap-flags...]
-  proxy-manager validate [flags]
-  proxy-manager scan     [flags]
-  proxy-manager man
-  proxy-manager help
+  rofk -proxlist <file> -ip <target> [options] [nmap-flags...]
+  rofk validate [flags]
+  rofk scan     [flags]
+  rofk man
+  rofk help
 
 PROXY-MANAGER FLAGS
   -proxlist <file>     Proxy list file (socks4/5://host:port, one per line)
@@ -434,10 +434,10 @@ NMAP PASS-THROUGH
   Examples: -sV  -sC  -A  -O  -T4  -Pn  --script=vuln  -oX /tmp/out.xml
 
 EXAMPLES
-  proxy-manager -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443 -sV
-  proxy-manager -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -T4 -A
-  proxy-manager -proxlist ~/proxies.txt -ip target.com -type json -out results.json -sV
-  proxy-manager -proxlist ~/proxies.txt -ip target.com -- -sV --script vuln
+  rofk -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443 -sV
+  rofk -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -T4 -A
+  rofk -proxlist ~/proxies.txt -ip target.com -type json -out results.json -sV
+  rofk -proxlist ~/proxies.txt -ip target.com -- -sV --script vuln
 
 NMAP DETECTION
   nmap must be installed separately.  Install it:
@@ -447,16 +447,16 @@ NMAP DETECTION
     Windows:  winget install nmap
 
   If nmap is in a non-standard location:
-    proxy-manager -nmap-path /opt/nmap/bin/nmap ...
-  The path is saved to ~/.config/proxymgr/config for future runs.
+    rofk -nmap-path /opt/nmap/bin/nmap ...
+  The path is saved to ~/.config/rofk/config for future runs.
 
 MAN PAGE
-  proxy-manager man            Print man page to stdout
-  man proxy-manager            After running: make install-man
+  rofk man            Print man page to stdout
+  man rofk            After running: make install-man
 
 LEGACY SUB-COMMANDS (still work)
-  proxy-manager validate -f proxies.txt -o valid.txt
-  proxy-manager scan     -pool valid.txt -target host -tool nmap
+  rofk validate -f proxies.txt -o valid.txt
+  rofk scan     -pool valid.txt -target host -tool nmap
 `
 
 // PrintUsage prints the full usage to stdout.
@@ -482,6 +482,6 @@ func nmapMissingMsg(tried string) string {
 	sb.WriteString("  Fedora:   dnf install nmap\n")
 	sb.WriteString("  Windows:  winget install nmap  (or nmap.org installer)\n\n")
 	sb.WriteString("Or specify the binary path:\n")
-	sb.WriteString("  proxy-manager -nmap-path /path/to/nmap ...\n\n")
+	sb.WriteString("  rofk -nmap-path /path/to/nmap ...\n\n")
 	return sb.String()
 }

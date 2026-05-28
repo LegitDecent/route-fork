@@ -1,4 +1,4 @@
-# proxy-manager
+# Route Fork
 
 > **Putting it plainly: this tool can MANAGE to take down servers.**
 > It routes scans through proxy pools and can flood connections, overwhelm SNAT, and generate DoS-level traffic if misused.
@@ -26,23 +26,23 @@ Download the binary for your platform from the [Releases](../../releases) page.
 
 ### macOS (M1/M2/M3 + Intel via Rosetta 2)
 ```bash
-chmod +x proxy-manager-macos-arm64
-sudo mv proxy-manager-macos-arm64 /usr/local/bin/proxy-manager
+chmod +x rofk-macos-arm64
+sudo mv rofk-macos-arm64 /usr/local/bin/rofk
 ```
 
 ### Linux
 ```bash
-chmod +x proxy-manager-linux-amd64
-sudo mv proxy-manager-linux-amd64 /usr/local/bin/proxy-manager
+chmod +x rofk-linux-amd64
+sudo mv rofk-linux-amd64 /usr/local/bin/rofk
 ```
 
 ### Windows
-Download `proxy-manager-windows-amd64.exe`, rename to `proxy-manager.exe`, add to `PATH`.
+Download `rofk-windows-amd64.exe`, rename to `rofk.exe`, add to `PATH`.
 
 ### Man page (optional)
 ```bash
-sudo install -m644 docs/proxy-manager.1 /usr/local/share/man/man1/
-man proxy-manager
+sudo install -m644 docs/rofk.1 /usr/local/share/man/man1/
+man rofk
 ```
 
 ---
@@ -59,16 +59,16 @@ Windows: winget install nmap
 
 If nmap is in a non-standard location, set the path once:
 ```bash
-proxy-manager -nmap-path /opt/nmap/bin/nmap -proxlist proxies.txt -ip target
+rofk -nmap-path /opt/nmap/bin/nmap -proxlist proxies.txt -ip target
 ```
-The path is saved to `~/.config/proxymgr/config`.
+The path is saved to `~/.config/rofk/config`.
 
 ---
 
 ## CLI Usage
 
 ```
-proxy-manager -proxlist <file> -ip <target> [options] [nmap-flags...]
+rofk -proxlist <file> -ip <target> [options] [nmap-flags...]
 ```
 
 | Flag | Description |
@@ -89,26 +89,26 @@ proxy-manager -proxlist <file> -ip <target> [options] [nmap-flags...]
 
 ```bash
 # Service version detection
-proxy-manager -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443 -sV
+rofk -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443 -sV
 
 # Aggressive scan of a /24, save JSON
-proxy-manager -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -T4 -A \
+rofk -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -T4 -A \
   -type json -out results.json
 
 # NSE scripts + nmap XML output
-proxy-manager -proxlist proxies.txt -ip target.com -sV --script=vuln -oX nmap.xml
+rofk -proxlist proxies.txt -ip target.com -sV --script=vuln -oX nmap.xml
 
 # Built-in scanner (no nmap needed)
-proxy-manager -proxlist proxies.txt -ip target.com -p 1-65535 -tool builtin
+rofk -proxlist proxies.txt -ip target.com -p 1-65535 -tool builtin
 ```
 
 ### Legacy subcommands (still work)
 
 ```bash
-proxy-manager validate -f raw.txt -o live.txt -t 200 -T 8
-proxy-manager scan -pool live.txt -target host -tool nmap
-proxy-manager man
-proxy-manager help
+rofk validate -f raw.txt -o live.txt -t 200 -T 8
+rofk scan -pool live.txt -target host -tool nmap
+rofk man
+rofk help
 ```
 
 ---
@@ -117,7 +117,7 @@ proxy-manager help
 
 Run with no arguments:
 ```bash
-proxy-manager
+rofk
 ```
 
 **Proxies tab** — paste or import proxy lists, validate concurrently, export live proxies.  
@@ -144,11 +144,11 @@ host:port:user:pass
 Requires [Go 1.21+](https://go.dev/dl/).
 
 ```bash
-git clone https://github.com/LegitDecent/proxy-manager
-cd proxy-manager
+git clone https://github.com/LegitDecent/route-fork
+cd route-fork
 make install        # build + install binary + man page
 # or
-go build -o proxy-manager .
+go build -o rofk .
 ```
 
 ---

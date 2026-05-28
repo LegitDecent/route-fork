@@ -20,11 +20,11 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"proxymgr/cli"
-	"proxymgr/pool"
-	"proxymgr/proxy"
-	"proxymgr/relay"
-	"proxymgr/scanner"
+	"rofk/cli"
+	"rofk/pool"
+	"rofk/proxy"
+	"rofk/relay"
+	"rofk/scanner"
 )
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ func (st *state) clearHosts() {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 func Run() {
-	a := app.NewWithID("com.proxymgr.app")
+	a := app.NewWithID("com.rofk.app")
 	a.Settings().SetTheme(theme.DarkTheme())
 
 	w := a.NewWindow("SOCKS Proxy Manager")

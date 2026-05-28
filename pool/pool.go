@@ -1,7 +1,7 @@
 package pool
 
 import (
-	"proxymgr/proxy"
+	"rofk/proxy"
 	"sync"
 )
 

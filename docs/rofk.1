@@ -1,23 +1,23 @@
-.TH PROXY\-MANAGER 1 "2026" "proxy-manager" "User Commands"
+.TH ROFK 1 "2026" "Route Fork" "User Commands"
 .SH NAME
-proxy\-manager \- SOCKS proxy\-aware port scanner with nmap integration
+rofk \- SOCKS proxy\-aware port scanner with nmap integration
 .SH SYNOPSIS
-.B proxy\-manager
+.B rofk
 \fB\-proxlist\fR \fIfile\fR
 \fB\-ip\fR \fItarget\fR
 [\fIoptions\fR]
 [\fInmap\-flags\fR...]
 .PP
-.B proxy\-manager
+.B rofk
 \fBvalidate\fR [\fIflags\fR]
 .PP
-.B proxy\-manager
+.B rofk
 \fBscan\fR [\fIflags\fR]
 .PP
-.B proxy\-manager
+.B rofk
 [\fBman\fR|\fBhelp\fR]
 .SH DESCRIPTION
-.B proxy\-manager
+.B rofk
 routes port scans through SOCKS4/SOCKS5 proxy pools.
 It starts a local SOCKS4 relay so that
 .BR nmap (1)
@@ -29,7 +29,7 @@ and every other flag goes straight to nmap unchanged.
 .PP
 Running without arguments opens the graphical user interface.
 .SH OPTIONS
-.SS "Proxy-manager flags"
+.SS "Route Fork flags"
 .TP
 \fB\-proxlist\fR \fIfile\fR
 Proxy list file.  One entry per line.  Accepted formats:
@@ -88,7 +88,7 @@ Wrap pool when exhausted (default: on).
 .TP
 \fB\-nmap\-path\fR \fIpath\fR
 Absolute path to the nmap binary.
-Saved to \fI~/.config/proxymgr/config\fR for future runs.
+Saved to \fI~/.config/rofk/config\fR for future runs.
 .SS "nmap pass-through"
 Every flag not listed above is forwarded to nmap unchanged.
 This includes \fB\-sV\fR, \fB\-sC\fR, \fB\-A\fR, \fB\-O\fR, \fB\-T4\fR,
@@ -99,13 +99,13 @@ Use \fB\-\-\fR to separate ambiguous flags if needed.
 .B validate
 Validate a list of proxies concurrently.
 .nf
-  proxy\-manager validate \-f proxies.txt \-o valid.txt \-t 100 \-T 10
+  rofk validate \-f proxies.txt \-o valid.txt \-t 100 \-T 10
 .fi
 .TP
 .B scan
 Legacy scan subcommand (nmap or built\-in).
 .nf
-  proxy\-manager scan \-pool valid.txt \-target host \-tool nmap
+  rofk scan \-pool valid.txt \-target host \-tool nmap
 .fi
 .TP
 .B man
@@ -116,48 +116,48 @@ Pipe through \fBman \-l \-\fR to render it in a pager.
 Print the usage summary.
 .SH FILES
 .TP
-.I ~/.config/proxymgr/config
+.I ~/.config/rofk/config
 Key\-value configuration file.  Currently stores \fBnmap_path\fR.
 .SH EXAMPLES
 .PP
 Scan common ports on a single host, detect service versions:
 .nf
-  proxy\-manager \-proxlist ~/proxies.txt \-ip 192.168.1.2 \-p 80,443 \-sV
+  rofk \-proxlist ~/proxies.txt \-ip 192.168.1.2 \-p 80,443 \-sV
 .fi
 .PP
 Scan a /24 with aggressive timing, save JSON output:
 .nf
-  proxy\-manager \-proxlist ~/proxies.txt \-ip 10.0.0.0/24 \-p 1\-1024 \-T4 \-A \\
+  rofk \-proxlist ~/proxies.txt \-ip 10.0.0.0/24 \-p 1\-1024 \-T4 \-A \\
     \-type json \-out results.json
 .fi
 .PP
 Run NSE scripts, forward nmap XML to a file:
 .nf
-  proxy\-manager \-proxlist proxies.txt \-ip target.com \-sV \-\-script=vuln \\
+  rofk \-proxlist proxies.txt \-ip target.com \-sV \-\-script=vuln \\
     \-oX nmap\-out.xml
 .fi
 .PP
 Use a custom nmap binary path (saves for future runs):
 .nf
-  proxy\-manager \-nmap\-path /opt/nmap/bin/nmap \-proxlist proxies.txt \-ip host
+  rofk \-nmap\-path /opt/nmap/bin/nmap \-proxlist proxies.txt \-ip host
 .fi
 .PP
 Validate a proxy list and save live proxies:
 .nf
-  proxy\-manager validate \-f raw.txt \-o live.txt \-t 200 \-T 8
+  rofk validate \-f raw.txt \-o live.txt \-t 200 \-T 8
 .fi
 .SH INSTALLATION
 .SS "Building from source"
 .nf
-  git clone https://github.com/YOUR_USERNAME/proxy\-manager
-  cd proxy\-manager
+  git clone https://github.com/YOUR_USERNAME/rofk
+  cd rofk
   make install        # builds and installs binary + man page
 .fi
 Or without make:
 .nf
-  go build \-o proxy\-manager .
-  install \-m755 proxy\-manager /usr/local/bin/
-  install \-m644 docs/proxy\-manager.1 /usr/local/share/man/man1/
+  go build \-o rofk .
+  install \-m755 rofk /usr/local/bin/
+  install \-m644 docs/rofk.1 /usr/local/share/man/man1/
 .fi
 .SS "nmap"
 nmap must be installed separately.

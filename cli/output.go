@@ -78,7 +78,7 @@ func csvEsc(s string) string {
 // ── XML ──────────────────────────────────────────────────────────────────────
 
 type xmlReport struct {
-	XMLName xml.Name  `xml:"proxymgr"`
+	XMLName xml.Name  `xml:"rofk"`
 	Hosts   []xmlHost `xml:"host"`
 }
 
