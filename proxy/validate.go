@@ -4,8 +4,78 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
+
+// dialThroughProxy opens a TCP tunnel to host:port through the SOCKS proxy.
+// After a successful return the connection is ready to carry application data.
+func dialThroughProxy(p *Proxy, host string, port int, timeout time.Duration) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", p.Address(), timeout)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetDeadline(time.Now().Add(timeout))
+
+	var ok bool
+	var errStr string
+	if p.Proto == "socks5" {
+		ok, errStr = socks5Handshake(conn, host, port, p.Username, p.Password)
+	} else {
+		ok, errStr = socks4Handshake(conn, host, port)
+	}
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("%s", errStr)
+	}
+	return conn, nil
+}
+
+// FetchEgressIP sends an HTTP request through the proxy to an IP-echo service
+// and returns the outbound IP the target actually sees.
+// On success p.EgressIP is populated. Tries two services before giving up.
+func FetchEgressIP(p *Proxy, timeout time.Duration) (string, error) {
+	services := []string{"api.ipify.org", "checkip.amazonaws.com"}
+	for _, host := range services {
+		conn, err := dialThroughProxy(p, host, 80, timeout)
+		if err != nil {
+			continue
+		}
+		conn.SetDeadline(time.Now().Add(timeout))
+
+		req := "GET / HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
+		if _, err = conn.Write([]byte(req)); err != nil {
+			conn.Close()
+			continue
+		}
+
+		buf := make([]byte, 2048)
+		total := 0
+		for total < len(buf) {
+			n, err := conn.Read(buf[total:])
+			total += n
+			if err != nil {
+				break
+			}
+		}
+		conn.Close()
+
+		if total == 0 {
+			continue
+		}
+		// HTTP response: headers\r\n\r\nbody
+		parts := strings.SplitN(string(buf[:total]), "\r\n\r\n", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		ip := strings.TrimSpace(parts[1])
+		if net.ParseIP(ip) != nil {
+			p.EgressIP = ip
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("could not determine egress IP")
+}
 
 // Validate performs a raw SOCKS4/5 handshake to verify the proxy is alive.
 // Returns success, latency in ms, and an error string.

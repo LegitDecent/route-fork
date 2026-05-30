@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -301,12 +302,8 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 					defer func() { <-sem }()
 
 					ok, ms, errStr := proxy.Validate(p, to, st.testHost, st.testPort)
-					n := done.Add(1)
-					pct := float64(n) / float64(total)
-					progressBind.Set(pct)
-					statusBind.Set(fmt.Sprintf("Validating %d / %d  (%.0f%%)", n, total, pct*100))
-
 					if ok {
+						_, _ = proxy.FetchEgressIP(p, to) // fills p.EgressIP inline
 						p.Status = proxy.StatusValid
 						p.LatencyMs = ms
 						st.pool.AddValid(p)
@@ -323,13 +320,119 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 						st.failedMu.Unlock()
 						failedList.Refresh()
 					}
+					n := done.Add(1)
+					pct := float64(n) / float64(total)
+					progressBind.Set(pct)
+					statusBind.Set(fmt.Sprintf("Validating %d / %d  (%.0f%%)", n, total, pct*100))
 					refreshCounts()
 				}(p)
 			}
 			wg.Wait()
 			progressBind.Set(1.0)
-			statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
-				st.pool.ValidCount(), st.pool.FailedCount(), total))
+
+			// ── Egress deduplication ──────────────────────────────────────────
+			valid := st.pool.Valid()
+			byEgress := make(map[string][]*proxy.Proxy)
+			for _, px := range valid {
+				if px.EgressIP != "" {
+					byEgress[px.EgressIP] = append(byEgress[px.EgressIP], px)
+				}
+			}
+
+			type dupeGroup struct {
+				ip      string
+				proxies []*proxy.Proxy
+			}
+			var dupeGroups []dupeGroup
+			totalDupes := 0
+			for ip, group := range byEgress {
+				if len(group) > 1 {
+					sort.Slice(group, func(i, j int) bool {
+						return group[i].LatencyMs < group[j].LatencyMs
+					})
+					dupeGroups = append(dupeGroups, dupeGroup{ip, group})
+					totalDupes += len(group) - 1
+				}
+			}
+			sort.Slice(dupeGroups, func(i, j int) bool {
+				return dupeGroups[i].ip < dupeGroups[j].ip
+			})
+
+			if len(dupeGroups) == 0 {
+				statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
+					st.pool.ValidCount(), st.pool.FailedCount(), total))
+				return
+			}
+
+			// Build scrollable summary
+			var lines []fyne.CanvasObject
+			lines = append(lines, widget.NewLabelWithStyle(
+				fmt.Sprintf("%d duplicate egress IP(s) found — %d redundant proxies share an exit IP with a faster one.",
+					len(dupeGroups), totalDupes),
+				fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
+			))
+			for _, g := range dupeGroups {
+				lines = append(lines, widget.NewSeparator())
+				lines = append(lines, widget.NewLabelWithStyle(
+					"Egress IP: "+g.ip,
+					fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
+				))
+				for i, px := range g.proxies {
+					marker := "keep"
+					if i > 0 {
+						marker = "dupe"
+					}
+					lines = append(lines, widget.NewLabel(
+						fmt.Sprintf("  [%s]  %s  %.0f ms", marker, px.Address(), px.LatencyMs),
+					))
+				}
+			}
+			scroll := container.NewScroll(container.NewVBox(lines...))
+			scroll.SetMinSize(fyne.NewSize(580, 340))
+
+			d := dialog.NewCustomConfirm(
+				"Duplicate Egress IPs Detected",
+				"Remove Duplicates",
+				"Keep All",
+				scroll,
+				func(remove bool) {
+					if !remove {
+						statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
+							st.pool.ValidCount(), st.pool.FailedCount(), total))
+						return
+					}
+					// Keep: fastest per duplicate group, all unique-egress, all unknown-egress
+					keepSet := make(map[string]bool)
+					for _, g := range dupeGroups {
+						keepSet[g.proxies[0].Address()] = true // fastest only
+					}
+					var kept []*proxy.Proxy
+					for _, px := range valid {
+						if px.EgressIP == "" {
+							kept = append(kept, px) // unknown egress: keep
+						} else if len(byEgress[px.EgressIP]) == 1 {
+							kept = append(kept, px) // unique egress IP: keep
+						} else if keepSet[px.Address()] {
+							kept = append(kept, px) // fastest in dupe group: keep
+						}
+						// slower duplicates: drop
+					}
+					st.pool.SetValid(kept)
+					st.validMu.Lock()
+					st.validRows = st.validRows[:0]
+					for _, px := range kept {
+						st.validRows = append(st.validRows, px.DisplayValid())
+					}
+					st.validMu.Unlock()
+					validList.Refresh()
+					refreshCounts()
+					statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d  (%d dupes removed)",
+						st.pool.ValidCount(), st.pool.FailedCount(), total, totalDupes))
+				},
+				w,
+			)
+			d.Resize(fyne.NewSize(620, 440))
+			d.Show()
 		}()
 	})
 

@@ -25,6 +25,7 @@ type Proxy struct {
 	LatencyMs  float64
 	Status     Status
 	FailReason string
+	EgressIP   string // real outbound IP seen by targets (may differ from Host)
 }
 
 func (p *Proxy) Address() string {
@@ -39,7 +40,11 @@ func (p *Proxy) URI() string {
 }
 
 func (p *Proxy) DisplayValid() string {
-	return fmt.Sprintf("%-24s  %-7s  %.0f ms", p.Address(), p.Proto, p.LatencyMs)
+	s := fmt.Sprintf("%-24s  %-7s  %.0f ms", p.Address(), p.Proto, p.LatencyMs)
+	if p.EgressIP != "" {
+		s += "  egress:" + p.EgressIP
+	}
+	return s
 }
 
 func (p *Proxy) DisplayFailed() string {

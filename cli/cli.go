@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -107,6 +108,7 @@ func runValidate(args []string) {
 	}
 
 	var mu sync.Mutex
+	var validProxies []*proxy.Proxy
 	var valid, failed atomic.Int64
 	sem := make(chan struct{}, *threads)
 	var wg sync.WaitGroup
@@ -120,11 +122,18 @@ func runValidate(args []string) {
 			defer func() { <-sem }()
 			ok, ms, errStr := proxy.Validate(p, to, *testHost, *testPort)
 			if ok {
+				p.LatencyMs = ms
+				_, _ = proxy.FetchEgressIP(p, to)
 				valid.Add(1)
 				mu.Lock()
 				fmt.Fprintln(out, p.URI())
+				validProxies = append(validProxies, p)
 				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "[+] %-26s  %.0f ms\n", p.Address(), ms)
+				egStr := ""
+				if p.EgressIP != "" {
+					egStr = "  egress:" + p.EgressIP
+				}
+				fmt.Fprintf(os.Stderr, "[+] %-26s  %.0f ms%s\n", p.Address(), ms, egStr)
 			} else {
 				failed.Add(1)
 				fmt.Fprintf(os.Stderr, "[-] %-26s  %s\n", p.Address(), errStr)
@@ -133,6 +142,37 @@ func runValidate(args []string) {
 	}
 	wg.Wait()
 	fmt.Fprintf(os.Stderr, "[=] Done: %d valid, %d failed\n", valid.Load(), failed.Load())
+	printEgressSummary(validProxies)
+}
+
+// printEgressSummary prints a warning when multiple valid proxies share the same egress IP.
+func printEgressSummary(proxies []*proxy.Proxy) {
+	byEgress := make(map[string]int)
+	for _, p := range proxies {
+		if p.EgressIP != "" {
+			byEgress[p.EgressIP]++
+		}
+	}
+	if len(byEgress) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[=] Unique egress IPs: %d\n", len(byEgress))
+
+	var dupeIPs []string
+	for ip, count := range byEgress {
+		if count > 1 {
+			dupeIPs = append(dupeIPs, ip)
+		}
+	}
+	if len(dupeIPs) == 0 {
+		return
+	}
+	sort.Strings(dupeIPs)
+	fmt.Fprintf(os.Stderr, "[!] %d egress IP(s) shared by multiple proxies — these are redundant:\n", len(dupeIPs))
+	for _, ip := range dupeIPs {
+		fmt.Fprintf(os.Stderr, "    %s  (%d proxies)\n", ip, byEgress[ip])
+	}
+	fmt.Fprintln(os.Stderr, "[!] Consider removing duplicates — they provide no additional anonymity.")
 }
 
 // ── scan ──────────────────────────────────────────────────────────────────────

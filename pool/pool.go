@@ -96,3 +96,13 @@ func (p *Pool) ResetIndex() {
 	p.index = 0
 	p.mu.Unlock()
 }
+
+// SetValid replaces the entire valid pool with the supplied slice and resets the index.
+// Used after egress deduplication.
+func (p *Pool) SetValid(proxies []*proxy.Proxy) {
+	p.mu.Lock()
+	p.valid = make([]*proxy.Proxy, len(proxies))
+	copy(p.valid, proxies)
+	p.index = 0
+	p.mu.Unlock()
+}
