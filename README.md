@@ -155,6 +155,20 @@ go build -o rofk .
 
 ---
 
+## Development
+
+```bash
+go test ./...
+```
+
+Tests cover the SOCKS4/5 handshake and proxy-dial logic, the local relay
+(forward path, SOCKS4a hostname handling, failure behaviour), the port
+scanner (open/closed ports, per-connection proxy tracking, context
+cancellation), and pool management. All tests use local mock servers — no
+external network required.
+
+---
+
 ## Legal
 
 This tool is for **authorised security testing only**.  
