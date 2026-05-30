@@ -358,7 +358,15 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 				return dupeGroups[i].ip < dupeGroups[j].ip
 			})
 
-			if len(dupeGroups) == 0 {
+			// count proxies where egress fetch failed
+			unknownCount := 0
+			for _, px := range valid {
+				if px.EgressIP == "" {
+					unknownCount++
+				}
+			}
+
+			if len(dupeGroups) == 0 && unknownCount == 0 {
 				statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
 					st.pool.ValidCount(), st.pool.FailedCount(), total))
 				return
@@ -366,33 +374,54 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 
 			// Build scrollable summary
 			var lines []fyne.CanvasObject
-			lines = append(lines, widget.NewLabelWithStyle(
-				fmt.Sprintf("%d duplicate egress IP(s) found — %d redundant proxies share an exit IP with a faster one.",
-					len(dupeGroups), totalDupes),
-				fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
-			))
-			for _, g := range dupeGroups {
-				lines = append(lines, widget.NewSeparator())
+
+			if len(dupeGroups) > 0 {
 				lines = append(lines, widget.NewLabelWithStyle(
-					"Egress IP: "+g.ip,
+					fmt.Sprintf("%d duplicate egress IP(s) — %d redundant proxies share an exit IP with a faster one.",
+						len(dupeGroups), totalDupes),
 					fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
 				))
-				for i, px := range g.proxies {
-					marker := "keep"
-					if i > 0 {
-						marker = "dupe"
-					}
-					lines = append(lines, widget.NewLabel(
-						fmt.Sprintf("  [%s]  %s  %.0f ms", marker, px.Address(), px.LatencyMs),
+				for _, g := range dupeGroups {
+					lines = append(lines, widget.NewSeparator())
+					lines = append(lines, widget.NewLabelWithStyle(
+						"Egress IP: "+g.ip,
+						fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
 					))
+					for i, px := range g.proxies {
+						marker := "keep"
+						if i > 0 {
+							marker = "dupe"
+						}
+						lines = append(lines, widget.NewLabel(
+							fmt.Sprintf("  [%s]  %s  %.0f ms", marker, px.Address(), px.LatencyMs),
+						))
+					}
 				}
 			}
+
+			if unknownCount > 0 {
+				lines = append(lines, widget.NewSeparator())
+				lines = append(lines, widget.NewLabelWithStyle(
+					fmt.Sprintf("%d proxy/proxies could not have their egress IP verified — exit node unknown, untrustworthy.",
+						unknownCount),
+					fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
+				))
+				for _, px := range valid {
+					if px.EgressIP == "" {
+						lines = append(lines, widget.NewLabel(
+							fmt.Sprintf("  [cut]  %s  %.0f ms", px.Address(), px.LatencyMs),
+						))
+					}
+				}
+			}
+
 			scroll := container.NewScroll(container.NewVBox(lines...))
 			scroll.SetMinSize(fyne.NewSize(580, 340))
 
+			removed := totalDupes + unknownCount
 			d := dialog.NewCustomConfirm(
-				"Duplicate Egress IPs Detected",
-				"Remove Duplicates",
+				"Pool Cleanup Required",
+				fmt.Sprintf("Remove %d Bad Proxies", removed),
 				"Keep All",
 				scroll,
 				func(remove bool) {
@@ -401,7 +430,8 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 							st.pool.ValidCount(), st.pool.FailedCount(), total))
 						return
 					}
-					// Keep: fastest per duplicate group, all unique-egress, all unknown-egress
+					// Keep: fastest per duplicate group + verified unique egress only
+					// Drop: slower duplicates, unknown-egress proxies
 					keepSet := make(map[string]bool)
 					for _, g := range dupeGroups {
 						keepSet[g.proxies[0].Address()] = true // fastest only
@@ -409,9 +439,9 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 					var kept []*proxy.Proxy
 					for _, px := range valid {
 						if px.EgressIP == "" {
-							kept = append(kept, px) // unknown egress: keep
+							continue // unverified egress: cut
 						} else if len(byEgress[px.EgressIP]) == 1 {
-							kept = append(kept, px) // unique egress IP: keep
+							kept = append(kept, px) // unique egress: keep
 						} else if keepSet[px.Address()] {
 							kept = append(kept, px) // fastest in dupe group: keep
 						}
@@ -426,12 +456,12 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 					st.validMu.Unlock()
 					validList.Refresh()
 					refreshCounts()
-					statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d  (%d dupes removed)",
-						st.pool.ValidCount(), st.pool.FailedCount(), total, totalDupes))
+					statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d  (%d removed)",
+						st.pool.ValidCount(), st.pool.FailedCount(), total, removed))
 				},
 				w,
 			)
-			d.Resize(fyne.NewSize(620, 440))
+			d.Resize(fyne.NewSize(620, 480))
 			d.Show()
 		}()
 	})

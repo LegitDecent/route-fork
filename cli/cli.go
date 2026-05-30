@@ -145,18 +145,25 @@ func runValidate(args []string) {
 	printEgressSummary(validProxies)
 }
 
-// printEgressSummary prints a warning when multiple valid proxies share the same egress IP.
+// printEgressSummary warns about proxies with shared or unverifiable egress IPs.
 func printEgressSummary(proxies []*proxy.Proxy) {
 	byEgress := make(map[string]int)
+	unknownCount := 0
 	for _, p := range proxies {
 		if p.EgressIP != "" {
 			byEgress[p.EgressIP]++
+		} else {
+			unknownCount++
 		}
 	}
-	if len(byEgress) == 0 {
-		return
+
+	if unknownCount > 0 {
+		fmt.Fprintf(os.Stderr, "[!] %d proxy/proxies had no verifiable egress IP — exit node unknown, untrustworthy. Remove them.\n", unknownCount)
 	}
-	fmt.Fprintf(os.Stderr, "[=] Unique egress IPs: %d\n", len(byEgress))
+
+	if len(byEgress) > 0 {
+		fmt.Fprintf(os.Stderr, "[=] Unique egress IPs: %d\n", len(byEgress))
+	}
 
 	var dupeIPs []string
 	for ip, count := range byEgress {
@@ -172,7 +179,7 @@ func printEgressSummary(proxies []*proxy.Proxy) {
 	for _, ip := range dupeIPs {
 		fmt.Fprintf(os.Stderr, "    %s  (%d proxies)\n", ip, byEgress[ip])
 	}
-	fmt.Fprintln(os.Stderr, "[!] Consider removing duplicates — they provide no additional anonymity.")
+	fmt.Fprintln(os.Stderr, "[!] Remove duplicates — they provide no additional anonymity.")
 }
 
 // ── scan ──────────────────────────────────────────────────────────────────────
