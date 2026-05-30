@@ -4,6 +4,61 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [v1.4.0] — 2026-05-30
+
+### Added
+- **Service name labels** — open ports show their common service name
+  (`ssh`, `https`, `mysql`, `ms-wbt-server`, …) instead of `unknown`, across the
+  GUI log, the Hosts tab, and all CLI output formats.
+- **Banner grabbing** — after a successful connect the scanner reads up to 256
+  bytes (800 ms) to capture a service banner (SSH version, FTP greeting, etc.),
+  shown inline in the log, in the Hosts tab, and exported in txt/csv/xml/json.
+- **Scan mode (open-port confirmation)** — a Scanner-page selector controls how
+  many proxies must independently agree a port is open before it's reported,
+  defeating proxies that fake a successful connection: **Fast** (1), **Confirmed**
+  (2, default), **Paranoid** (3). It is the sole authority over proxies-per-port.
+  Confirmation dials run in parallel (bounded by Concurrency), so even Paranoid
+  finishes in roughly one round-trip, and an authoritative "connection refused"
+  from any proxy immediately refutes a false open. Every proxy that agreed is
+  listed under the open port.
+- **Add common ports** — a checkbox beside the Ports field merges the common-port
+  list (deduplicated) directly into what you typed, so the exact ports are visible
+  before scanning; unchecking restores your original list.
+- **Hosts tab drill-down** — the Hosts view is now three panes
+  (Hosts → Open Ports → Validating Proxies). Selecting a port shows every proxy
+  that confirmed it, one per line, alongside its service, version, and banner.
+- **Auto-revalidation** — a Settings card re-checks the pool on a fixed interval
+  and drops proxies that have since died, with a live status line.
+- **Dead-proxy retry + prune during scans** — a proxy that fails on its own
+  (unreachable, not a SOCKS server, resets/closes mid-handshake, or never replies)
+  is skipped, another is tried, and dead proxies are pruned when the scan finishes.
+  Proxy-error retries are capped per port so a filtered target can't churn the pool.
+- **`-out -` writes to stdout** — the flat CLI streams scan results to stdout for
+  piping (e.g. `… -out - -type json | jq`).
+- **Skip-validation confirmation** — "Add to Pool (skip validation)" warns about
+  the risks (dead proxies, possible IP leakage, no egress data) before adding.
+
+### Changed
+- **`-Pn` is now the default for nmap** in every path (CLI scan, flat CLI, GUI),
+  since host discovery does not work through SOCKS proxies.
+- **Hosts tab deduplicates ports across rescans** — re-scanning a port no longer
+  adds a duplicate row; newly-validating proxies are merged into the existing port
+  entry, and the per-host count reflects distinct ports.
+
+### Fixed
+- **No false "open" from a single lying proxy** — open results require quorum
+  agreement (Scan mode); one proxy faking a CONNECT success can no longer mark a
+  closed/filtered port open on its own.
+- **Closed/filtered ports no longer churn the pool, and open ports aren't missed
+  by flaky proxies** — the retry classifier distinguishes proxy-side failures
+  (connection reset, no CONNECT reply, unreachable proxy → retry) from genuine
+  target results (`connection refused`, SOCKS4 rejection → reported as closed).
+- **Stop button is now responsive** — per-port scan dials race against
+  cancellation, so Stop interrupts in-flight connections immediately instead of
+  waiting out the dial timeout.
+
+---
+
 ## [v1.3.0] — 2026-05-30
 
 ### Fixed

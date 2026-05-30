@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -30,30 +31,57 @@ import (
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-// HostRecord accumulates open-port findings for a single discovered host.
+// PortEntry is one open port on a host, deduplicated across rescans. Each rescan
+// merges any newly-validating proxies into Proxies rather than adding a new row.
+type PortEntry struct {
+	Port    int
+	Proto   string
+	Service string
+	Version string
+	Banner  string
+	Proxies []string // every distinct proxy that has validated this port
+}
+
+// HostRecord accumulates open ports for a single discovered host.
 type HostRecord struct {
-	IP       string
-	Findings []Finding
+	IP      string
+	Ports   []*PortEntry
+	portIdx map[string]int // "port/proto" → index into Ports
+}
+
+// dedupeAppend appends each item from add to base, skipping values already present.
+func dedupeAppend(base, add []string) []string {
+	seen := make(map[string]bool, len(base))
+	for _, b := range base {
+		seen[b] = true
+	}
+	for _, a := range add {
+		if a != "" && !seen[a] {
+			seen[a] = true
+			base = append(base, a)
+		}
+	}
+	return base
 }
 
 type state struct {
 	pool *pool.Pool
 
-	validMu  sync.RWMutex
+	validMu   sync.RWMutex
 	validRows []string // formatted display rows
 
 	failedMu   sync.RWMutex
 	failedRows []string
 
-	valCancel  context.CancelFunc
-	scanCancel context.CancelFunc
-	valRunning atomic.Bool
+	valCancel   context.CancelFunc
+	scanCancel  context.CancelFunc
+	valRunning  atomic.Bool
 	scanRunning atomic.Bool
 
 	// discovered hosts (Hosts tab)
-	hostsMu     sync.RWMutex
-	hostsMap    map[string]int // IP → index in hostsSlice
-	hostsSlice  []*HostRecord
+	hostsMu      sync.RWMutex
+	hostsMap     map[string]int // IP → index in hostsSlice
+	hostsSlice   []*HostRecord
 	hostsRefresh func() // set by buildHostsTab
 
 	// settings
@@ -62,18 +90,107 @@ type state struct {
 	testHost string
 	testPort int
 	wrap     bool
+
+	// auto-revalidation
+	revalDone   chan struct{}  // nil when not running
+	revalStatus binding.String // shown in Settings tab
+
+	// UI refresh callbacks (set by buildProxiesTab)
+	refreshValidList func()
+	refreshCounts    func()
 }
 
 func newState() *state {
 	return &state{
-		pool:     pool.New(),
-		hostsMap: make(map[string]int),
-		threads:  100,
-		timeout:  10,
-		testHost: "www.google.com",
-		testPort: 80,
-		wrap:     true,
+		pool:        pool.New(),
+		hostsMap:    make(map[string]int),
+		threads:     100,
+		timeout:     10,
+		testHost:    "www.google.com",
+		testPort:    80,
+		wrap:        true,
+		revalStatus: binding.NewString(),
 	}
+}
+
+// startAutoReval begins background periodic re-validation of the proxy pool.
+// Calling it again replaces any running timer.
+func (st *state) startAutoReval(interval time.Duration) {
+	st.stopAutoReval()
+	done := make(chan struct{})
+	st.revalDone = done
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				st.revalidatePool()
+			}
+		}
+	}()
+}
+
+// stopAutoReval stops the background revalidation goroutine if running.
+func (st *state) stopAutoReval() {
+	if st.revalDone != nil {
+		close(st.revalDone)
+		st.revalDone = nil
+	}
+}
+
+// revalidatePool re-checks every proxy in the valid pool and removes dead ones.
+func (st *state) revalidatePool() {
+	snapshot := st.pool.Valid()
+	if len(snapshot) == 0 {
+		return
+	}
+	st.revalStatus.Set(fmt.Sprintf("Revalidating %d proxies…", len(snapshot)))
+
+	to := time.Duration(float64(time.Second) * st.timeout)
+	var mu sync.Mutex
+	var kept []*proxy.Proxy
+	sem := make(chan struct{}, st.threads)
+	var wg sync.WaitGroup
+
+	for _, p := range snapshot {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(p *proxy.Proxy) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ok, ms, _ := proxy.Validate(p, to, st.testHost, st.testPort)
+			if ok {
+				p.LatencyMs = ms
+				mu.Lock()
+				kept = append(kept, p)
+				mu.Unlock()
+			}
+		}(p)
+	}
+	wg.Wait()
+
+	removed := len(snapshot) - len(kept)
+	st.pool.SetValid(kept)
+
+	st.validMu.Lock()
+	st.validRows = st.validRows[:0]
+	for _, px := range kept {
+		st.validRows = append(st.validRows, px.DisplayValid())
+	}
+	st.validMu.Unlock()
+
+	if st.refreshValidList != nil {
+		st.refreshValidList()
+	}
+	if st.refreshCounts != nil {
+		st.refreshCounts()
+	}
+
+	st.revalStatus.Set(fmt.Sprintf("Last revalidation: %d alive, %d removed",
+		len(kept), removed))
 }
 
 // pushFindings groups findings by host IP and notifies the Hosts tab.
@@ -90,9 +207,48 @@ func (st *state) pushFindings(findings []Finding) {
 		if !ok {
 			idx = len(st.hostsSlice)
 			st.hostsMap[f.Host] = idx
-			st.hostsSlice = append(st.hostsSlice, &HostRecord{IP: f.Host})
+			st.hostsSlice = append(st.hostsSlice, &HostRecord{IP: f.Host, portIdx: map[string]int{}})
 		}
-		st.hostsSlice[idx].Findings = append(st.hostsSlice[idx].Findings, f)
+		hr := st.hostsSlice[idx]
+		if hr.portIdx == nil {
+			hr.portIdx = map[string]int{}
+		}
+
+		pd := parsePortLine(f.Line)
+		key := pd.Port + "/" + pd.Proto
+
+		// All proxies that validated this finding.
+		provs := f.Proxies
+		if len(provs) == 0 && f.ProxyURI != "" {
+			provs = []string{f.ProxyURI}
+		}
+
+		if pi, exists := hr.portIdx[key]; exists {
+			// Rescan of a known port — merge in any new proxies, dedup.
+			pe := hr.Ports[pi]
+			pe.Proxies = dedupeAppend(pe.Proxies, provs)
+			if pe.Service == "" {
+				pe.Service = pd.Service
+			}
+			if pe.Version == "" {
+				pe.Version = pd.Version
+			}
+			if pe.Banner == "" {
+				pe.Banner = f.Banner
+			}
+		} else {
+			portNum, _ := strconv.Atoi(pd.Port)
+			pe := &PortEntry{
+				Port:    portNum,
+				Proto:   pd.Proto,
+				Service: pd.Service,
+				Version: pd.Version,
+				Banner:  f.Banner,
+				Proxies: dedupeAppend(nil, provs),
+			}
+			hr.portIdx[key] = len(hr.Ports)
+			hr.Ports = append(hr.Ports, pe)
+		}
 	}
 	refresh := st.hostsRefresh
 	st.hostsMu.Unlock()
@@ -142,7 +298,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 
 	// ── Progress / status bindings ──
 	progressBind := binding.NewFloat()
-	statusBind   := binding.NewString()
+	statusBind := binding.NewString()
 	statusBind.Set("Ready")
 
 	progressBar := widget.NewProgressBarWithData(progressBind)
@@ -187,7 +343,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 		},
 	)
 
-	validCountBind  := binding.NewString()
+	validCountBind := binding.NewString()
 	failedCountBind := binding.NewString()
 	validCountBind.Set("0 proxies")
 	failedCountBind.Set("0 proxies")
@@ -199,6 +355,9 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 		failedCountBind.Set(fmt.Sprintf("%d proxies", f))
 		statusBind.Set(fmt.Sprintf("Valid: %d   Failed: %d   Total: %d", v, f, v+f))
 	}
+	// Expose refresh hooks for auto-revalidation and mid-scan pruning.
+	st.refreshValidList = func() { validList.Refresh() }
+	st.refreshCounts = refreshCounts
 
 	// ── Toolbar buttons ──
 	var btnValidate *widget.Button
@@ -229,25 +388,41 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 			dialog.ShowInformation("Nothing parsed", "No proxy entries detected.", w)
 			return
 		}
-		existing := make(map[string]bool)
-		for _, p := range st.pool.Valid() {
-			existing[p.Address()] = true
-		}
-		added := 0
-		for _, p := range proxies {
-			if !existing[p.Address()] {
-				p.Status = proxy.StatusValid
-				p.LatencyMs = 0
-				st.pool.AddValid(p)
-				st.validMu.Lock()
-				st.validRows = append(st.validRows, p.Address()+"  "+p.Proto+"  unverified")
-				st.validMu.Unlock()
-				added++
+
+		msg := fmt.Sprintf(
+			"You are about to add %d proxy/proxies to the pool without any validation.\n\n"+
+				"Unvalidated proxies:\n"+
+				"  • May be dead or unreachable\n"+
+				"  • May leak your real IP if they fail mid-scan\n"+
+				"  • Have no measured latency or verified egress IP\n\n"+
+				"Use \"Validate All\" instead unless you have a specific reason to skip it.",
+			len(proxies),
+		)
+
+		dialog.ShowConfirm("Skip Validation — Are You Sure?", msg, func(confirmed bool) {
+			if !confirmed {
+				return
 			}
-		}
-		validList.Refresh()
-		refreshCounts()
-		dialog.ShowInformation("Added", fmt.Sprintf("%d proxies added (unverified).", added), w)
+			existing := make(map[string]bool)
+			for _, p := range st.pool.Valid() {
+				existing[p.Address()] = true
+			}
+			added := 0
+			for _, p := range proxies {
+				if !existing[p.Address()] {
+					p.Status = proxy.StatusValid
+					p.LatencyMs = 0
+					st.pool.AddValid(p)
+					st.validMu.Lock()
+					st.validRows = append(st.validRows, p.Address()+"  "+p.Proto+"  unverified")
+					st.validMu.Unlock()
+					added++
+				}
+			}
+			validList.Refresh()
+			refreshCounts()
+			dialog.ShowInformation("Added", fmt.Sprintf("%d proxies added (unverified).", added), w)
+		}, w)
 	})
 
 	btnClearInput := widget.NewButton("Clear Input", func() {
@@ -617,6 +792,34 @@ func nmapCmd(bin, ports, extra, proxyArg, target string, addPn bool) []string {
 	return args
 }
 
+// dialThroughProxyCtx wraps proxy.DialThroughProxy so a context cancellation
+// (Stop button) returns immediately instead of blocking until the dial timeout.
+// The underlying dial goroutine is left to finish on its own timeout; it holds
+// no locks and self-terminates, so leaking it briefly is harmless.
+func dialThroughProxyCtx(ctx context.Context, p *proxy.Proxy, host string, port int, to time.Duration) (net.Conn, error) {
+	type res struct {
+		c net.Conn
+		e error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		c, e := proxy.DialThroughProxy(p, host, port, to)
+		ch <- res{c, e}
+	}()
+	select {
+	case <-ctx.Done():
+		// Close the connection if the dial happens to complete after cancel.
+		go func() {
+			if r := <-ch; r.c != nil {
+				r.c.Close()
+			}
+		}()
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.c, r.e
+	}
+}
+
 // guiBuiltinScan runs the built-in TCP scanner, logs open ports in real-time,
 // annotates each with proxyLabel, and returns the count and findings.
 func guiBuiltinScan(ctx context.Context, getProxy func() *proxy.Proxy, target, ports string,
@@ -645,14 +848,22 @@ func guiBuiltinScan(ctx context.Context, getProxy func() *proxy.Proxy, target, p
 			if r.Proxy != nil {
 				label = proxyViaLabel(r.Proxy)
 			}
-			log(fmt.Sprintf("  ► OPEN  %s:%d\n", r.Host, r.Port))
+			svc := scanner.PortService(r.Port)
+			if svc == "" {
+				svc = "unknown"
+			}
+			log(fmt.Sprintf("  ► OPEN  %s:%d  [%s]\n", r.Host, r.Port, svc))
+			if r.Banner != "" {
+				log("      │  " + r.Banner + "\n")
+			}
 			if label != "" {
 				log("      └─ via " + label + "\n")
 			}
 			findings = append(findings, Finding{
 				Host:     r.Host,
-				Line:     fmt.Sprintf("%d/tcp   open", r.Port),
+				Line:     fmt.Sprintf("%d/tcp   open  %s", r.Port, svc),
 				ProxyURI: label,
+				Banner:   r.Banner,
 			})
 		}
 	}
@@ -670,6 +881,21 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 
 	portsEntry := widget.NewEntry()
 	portsEntry.SetText("1-65535")
+	// Checking "Add common ports" merges the common-port list (deduped) directly
+	// into the Ports field so you can see exactly what will be scanned.
+	// Unchecking restores what you had before.
+	var portsBeforeCommon string
+	var haveCommonSnap bool
+	commonPortsCheck := widget.NewCheck("Add common ports", func(checked bool) {
+		if checked {
+			portsBeforeCommon = portsEntry.Text
+			haveCommonSnap = true
+			portsEntry.SetText(mergeCommonPorts(portsEntry.Text))
+		} else if haveCommonSnap {
+			portsEntry.SetText(portsBeforeCommon)
+			haveCommonSnap = false
+		}
+	})
 
 	concEntry := widget.NewEntry()
 	concEntry.SetText("200")
@@ -690,14 +916,32 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 	maxRetriesEntry := widget.NewEntry()
 	maxRetriesEntry.SetText("2")
 
+	// Scan mode controls how many proxies must agree a port is open before it's
+	// reported. Guards against lying proxies that fake a successful CONNECT.
+	// Only applies to per-port rotation (built-in TCP scan).
+	verifyBlurbs := map[string]string{
+		"Fast (1 proxy)":        "Fastest. First proxy that connects decides — a lying proxy can report a false open.",
+		"Confirmed (2 proxies)": "Recommended. Two independent proxies must agree before a port is reported open — kills single-liar false positives.",
+		"Paranoid (3 proxies)":  "Strongest. Three proxies must agree — beats multiple liars, but slower and may miss opens on small/flaky pools.",
+	}
+	verifyBlurb := widget.NewLabel(verifyBlurbs["Confirmed (2 proxies)"])
+	verifyBlurb.Wrapping = fyne.TextWrapWord
+	verifySelect := widget.NewSelect(
+		[]string{"Fast (1 proxy)", "Confirmed (2 proxies)", "Paranoid (3 proxies)"},
+		func(s string) { verifyBlurb.SetText(verifyBlurbs[s]) },
+	)
+	verifySelect.Selected = "Confirmed (2 proxies)"
+
 	configForm := container.New(layout.NewFormLayout(),
 		widget.NewLabel("Tool:"), toolSelect,
 		widget.NewLabel("Target:"), targetEntry,
-		widget.NewLabel("Ports:"), portsEntry,
+		widget.NewLabel("Ports:"), container.NewBorder(nil, nil, nil, commonPortsCheck, portsEntry),
 		widget.NewLabel("Timing:"), timingSelect,
 		widget.NewLabel("Min-rate:"), minRateEntry,
 		widget.NewLabel("Max-retries:"), maxRetriesEntry,
 		widget.NewLabel("Concurrency:"), concEntry,
+		widget.NewLabel("Scan mode:"), verifySelect,
+		widget.NewLabel(""), verifyBlurb,
 		widget.NewLabel("Extra args:"), extraEntry,
 		widget.NewLabel("Custom cmd:"), customEntry,
 	)
@@ -715,31 +959,28 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 
 	rotateCheck := widget.NewCheck("Rotate proxy per scan", nil)
 	rotateCheck.SetChecked(true)
-	rotatePerPortCheck := widget.NewCheck("Rotate proxy per port", nil)
-	// rotatePerPortCheck starts enabled — both nmap (chunk-rotation) and Built-in support it
 	wrapCheck := widget.NewCheck("Wrap pool when exhausted", nil)
-	commonPortsCheck := widget.NewCheck("Add common ports on retry", nil)
 
 	toolSelect.OnChanged = func(s string) {
 		switch s {
 		case "custom":
 			customEntry.Enable()
 			extraEntry.Enable()
-			rotatePerPortCheck.Disable()
+			verifySelect.Disable()
 			timingSelect.Disable()
 			minRateEntry.Disable()
 			maxRetriesEntry.Disable()
 		case "nmap":
 			customEntry.Disable()
 			extraEntry.Enable()
-			rotatePerPortCheck.Enable()
+			verifySelect.Enable()
 			timingSelect.Enable()
 			minRateEntry.Enable()
 			maxRetriesEntry.Enable()
 		default: // Built-in
 			customEntry.Disable()
 			extraEntry.Disable()
-			rotatePerPortCheck.Enable()
+			verifySelect.Enable()
 			timingSelect.Disable()
 			minRateEntry.Disable()
 			maxRetriesEntry.Disable()
@@ -790,14 +1031,15 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 	}
 
 	// buildNmapExtras assembles timing + user extra flags for nmap commands.
+	// -Pn is always included: host discovery doesn't work through SOCKS proxies.
 	buildNmapExtras := func() string {
-		var parts []string
+		parts := []string{"-Pn"}
 		switch timingSelect.Selected {
 		case "Aggressive (T4)":
 			parts = append(parts, "-T4")
 		case "Insane (T5)":
 			parts = append(parts, "-T5")
-		// Default (T3) needs no flag — it's nmap's built-in default
+			// Default (T3) needs no flag — it's nmap's built-in default
 		}
 		if v := strings.TrimSpace(minRateEntry.Text); v != "" {
 			parts = append(parts, "--min-rate", v)
@@ -819,6 +1061,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 	var btnStart *widget.Button
 	btnStop := widget.NewButton("■  Stop", func() {
 		if st.scanCancel != nil {
+			appendLog("[!] Stopping scan… (in-flight connections cancelled)\n")
 			st.scanCancel()
 		}
 	})
@@ -916,66 +1159,21 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				to := time.Duration(float64(time.Second) * st.timeout)
 				portSpec := portsEntry.Text
 
-				// Build getProxy: random proxy per connection from pool snapshot
-				var getProxy func() *proxy.Proxy
-				var proxyLabel string
-				if rotatePerPortCheck.Checked {
-					snap := st.pool.Valid()
-					if len(snap) == 0 {
-						appendLog("[-] No proxies in pool\n")
-						continue
-					}
-					getProxy = func() *proxy.Proxy {
-						return snap[rand.Intn(len(snap))]
-					}
-					proxyLabel = fmt.Sprintf("[random from %d proxies]", len(snap))
-				} else {
-					getProxy = func() *proxy.Proxy { return px }
-					proxyLabel = proxyViaLabel(px)
-				}
-
 				var targetFindings []Finding
 				tool := toolSelect.Selected
 				switch tool {
 
-				case "Built-in (TCP connect)":
-					if rotatePerPortCheck.Checked {
-						appendLog(fmt.Sprintf("[*] Built-in scan  %s  ports:%s  rotating through %d proxies\n",
-							target, portSpec, len(st.pool.Valid())))
-					} else {
-						appendLog(fmt.Sprintf("[*] Built-in scan  %s  ports:%s  via %s\n",
-							target, portSpec, proxyLabel))
+				case "Built-in (TCP connect)", "nmap":
+					// Proxy-pool TCP scan governed by Scan mode (Fast/Confirmed/
+					// Paranoid = 1/2/3 proxies must agree a port is open). Applies
+					// regardless of any rotation checkbox — Scan mode is the authority.
+					snap := st.pool.Valid()
+					n := len(snap)
+					if n == 0 {
+						appendLog("[-] No proxies in pool\n")
+						continue
 					}
-					scanProgressBind.Set(0)
-					openCount, f1 := guiBuiltinScan(ctx, getProxy, target, portSpec,
-						conc, to, scanProgressBind, appendLog, proxyLabel)
-					targetFindings = append(targetFindings, f1...)
-					scanProgressBind.Set(1.0)
-					appendLog(fmt.Sprintf("[+] %d open port(s) on %s\n", openCount, target))
-
-					if openCount == 0 {
-						retry := portSpec
-						if commonPortsCheck.Checked {
-							retry = mergeCommonPorts(portSpec)
-							appendLog("[!] No open ports — retrying with -Pn + common ports...\n")
-						} else {
-							appendLog("[!] No open ports — retrying with -Pn on same ports...\n")
-						}
-						scanProgressBind.Set(0)
-						openCount2, f2 := guiBuiltinScan(ctx, getProxy, target, retry,
-							conc, to, scanProgressBind, appendLog, proxyLabel)
-						targetFindings = append(targetFindings, f2...)
-						scanProgressBind.Set(1.0)
-						appendLog(fmt.Sprintf("[+] Retry: %d open port(s) on %s\n", openCount2, target))
-						if openCount2 == 0 {
-							appendLog("[!] Still 0 open ports. Host may be down or all ports filtered.\n")
-						}
-					}
-
-				case "nmap":
-					if rotatePerPortCheck.Checked {
-						snap := st.pool.Valid()
-						n := len(snap)
+					{
 						var totalOpenAtomic atomic.Int64
 						var findingsMu sync.Mutex
 						var chunkWg sync.WaitGroup
@@ -1024,6 +1222,21 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							appendLog(fmt.Sprintf("[+] Chunk %d/%d: %d open\n", idx, n, open))
 						}
 
+						// failedSet tracks proxies that failed (proxy-side) during this
+						// scan so we can retry with others and prune them afterwards.
+						var failedMu sync.Mutex
+						failedSet := make(map[string]bool)
+						markFailed := func(px *proxy.Proxy) {
+							failedMu.Lock()
+							failedSet[px.Address()] = true
+							failedMu.Unlock()
+						}
+						isFailed := func(px *proxy.Proxy) bool {
+							failedMu.Lock()
+							defer failedMu.Unlock()
+							return failedSet[px.Address()]
+						}
+
 						isCIDR := strings.Contains(target, "/")
 						if isCIDR {
 							allIPs, cidrErr := scanner.ExpandTarget(target)
@@ -1066,19 +1279,36 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							// not nmap --proxies, which silently falls back to direct
 							// on macOS when the proxy rejects or times out.
 							if len(ports) <= n {
-								// More proxies than ports: one shuffled proxy per port.
+								// More proxies than ports: one goroutine per port, each
+								// trying proxies in shuffled order until enough agree.
 								shuffled := make([]*proxy.Proxy, len(snap))
 								copy(shuffled, snap)
 								rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
 								chunksLaunched = len(ports)
-								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d port(s) / %d proxies  1 port each  [parallel]\n",
-									target, len(ports), n))
+
+								// Quorum: how many proxies must independently agree a port
+								// is open before we report it (guards against lying proxies).
+								quorum := 1
+								switch verifySelect.Selected {
+								case "Confirmed (2 proxies)":
+									quorum = 2
+								case "Paranoid (3 proxies)":
+									quorum = 3
+								}
+								if quorum > n {
+									quorum = n
+								}
+								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d port(s) / %d proxies  1 port each  (need %d to agree open)  [parallel]\n",
+									target, len(ports), n, quorum))
+
+								// Shared dial-concurrency cap across all ports and their
+								// parallel confirmation batches.
+								dialSem := make(chan struct{}, conc)
+
 								for i, port := range ports {
-									proxyX := shuffled[i]
-									label := proxyViaLabel(proxyX)
-									appendLog(fmt.Sprintf("[*] Port %d → %s\n", port, label))
+									startIdx := i % len(shuffled)
 									chunkWg.Add(1)
-									go func(proxyX *proxy.Proxy, port int, label string) {
+									go func(startIdx, port int) {
 										defer chunkWg.Done()
 										defer func() {
 											done := chunksDone.Add(1)
@@ -1086,23 +1316,150 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 												scanProgressBind.Set(float64(done) / float64(chunksLaunched))
 											}
 										}()
-										if ctx.Err() != nil {
-											return
+										poolSize := len(shuffled)
+										// Cap proxy-error retries so a flaky/filtered target
+										// can't churn the entire pool.
+										maxProxyRetries := 10
+										if poolSize < maxProxyRetries {
+											maxProxyRetries = poolSize
 										}
-										conn, err := proxy.DialThroughProxy(proxyX, target, port, to)
-										if err != nil {
-											appendLog(fmt.Sprintf("[!] Port %d closed/filtered via %s (%v)\n", port, label, err))
-											return
+
+										confirmations := 0 // distinct proxies that voted open
+										proxyErrors := 0
+										refuted := false
+										var refutedBy string
+										var openLabels []string // every proxy that voted open
+										var openBanner string
+										consumed := 0 // proxies tried
+
+										// Probe proxies in PARALLEL batches: each round fires
+										// (still-needed + 2) dials at once, so quorum is reached
+										// in ~one round-trip instead of N sequential ones.
+										for confirmations < quorum && !refuted &&
+											proxyErrors < maxProxyRetries && consumed < poolSize {
+											if ctx.Err() != nil {
+												return
+											}
+											need := quorum - confirmations
+											batchN := need + 2
+											var batch []*proxy.Proxy
+											for len(batch) < batchN && consumed < poolSize {
+												p := shuffled[(startIdx+consumed)%poolSize]
+												consumed++
+												if isFailed(p) {
+													continue
+												}
+												batch = append(batch, p)
+											}
+											if len(batch) == 0 {
+												break
+											}
+
+											type voteResult struct {
+												vote   int // 1 open, -1 refused, 0 proxy-error
+												banner string
+												label  string
+												addr   string
+											}
+											results := make([]voteResult, len(batch))
+											var bwg sync.WaitGroup
+											for bi, p := range batch {
+												bwg.Add(1)
+												go func(bi int, p *proxy.Proxy) {
+													defer bwg.Done()
+													dialSem <- struct{}{}
+													defer func() { <-dialSem }()
+													if ctx.Err() != nil {
+														return
+													}
+													conn, err := dialThroughProxyCtx(ctx, p, target, port, to)
+													if ctx.Err() != nil {
+														if conn != nil {
+															conn.Close()
+														}
+														return
+													}
+													if err != nil {
+														if proxy.IsProxyError(p.Address(), err) {
+															markFailed(p)
+															results[bi] = voteResult{vote: 0, addr: p.Address()}
+														} else {
+															results[bi] = voteResult{vote: -1, addr: p.Address()}
+														}
+														return
+													}
+													var banner string
+													conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
+													bbuf := make([]byte, 256)
+													bn, _ := conn.Read(bbuf)
+													if bn > 0 {
+														banner = scanner.CleanBanner(bbuf[:bn])
+													}
+													conn.Close()
+													results[bi] = voteResult{vote: 1, banner: banner, label: proxyViaLabel(p), addr: p.Address()}
+												}(bi, p)
+											}
+											bwg.Wait()
+											if ctx.Err() != nil {
+												return
+											}
+
+											for _, r := range results {
+												switch r.vote {
+												case 1:
+													confirmations++
+													openLabels = append(openLabels, r.label)
+													if openBanner == "" {
+														openBanner = r.banner
+													}
+												case -1:
+													refuted = true
+													refutedBy = r.addr
+												case 0:
+													proxyErrors++
+												}
+											}
 										}
-										conn.Close()
-										totalOpenAtomic.Add(1)
-										portLine := fmt.Sprintf("%d/tcp   open  unknown", port)
-										appendLog("  ► OPEN  " + portLine + "\n")
-										appendLog("      └─ via " + label + "\n")
-										findingsMu.Lock()
-										targetFindings = append(targetFindings, Finding{Host: target, Line: portLine, ProxyURI: label})
-										findingsMu.Unlock()
-									}(proxyX, port, label)
+
+										// Decide.
+										switch {
+										case refuted:
+											if confirmations > 0 {
+												appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s) — closed\n", port, refutedBy, confirmations))
+											} else {
+												appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", port, refutedBy))
+											}
+										case confirmations >= quorum:
+											svc := scanner.PortService(port)
+											if svc == "" {
+												svc = "unknown"
+											}
+											portLine := fmt.Sprintf("%d/tcp   open  %s", port, svc)
+											totalOpenAtomic.Add(1)
+											appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", target, port, svc, confirmations, quorum))
+											if openBanner != "" {
+												appendLog("      │  " + openBanner + "\n")
+											}
+											for vi, lbl := range openLabels {
+												branch := "├─"
+												if vi == len(openLabels)-1 {
+													branch = "└─"
+												}
+												appendLog("      " + branch + " via " + lbl + "\n")
+											}
+											primary := ""
+											if len(openLabels) > 0 {
+												primary = openLabels[0]
+											}
+											findingsMu.Lock()
+											targetFindings = append(targetFindings, Finding{Host: target, Line: portLine, ProxyURI: primary, Proxies: openLabels, Banner: openBanner})
+											findingsMu.Unlock()
+										case confirmations > 0:
+											appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed) — treating as closed/filtered\n", port, confirmations, quorum))
+										default:
+											appendLog(fmt.Sprintf("[!] Port %d: no proxy could reach it (target may be filtered)\n", port))
+										}
+									}(startIdx, port)
 								}
 							} else {
 								// More ports than proxies: chunk ports across proxies.
@@ -1155,6 +1512,40 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 
 						chunkWg.Wait()
 						scanProgressBind.Set(1.0)
+
+						// Prune proxies that failed (proxy-side) during this scan.
+						failedMu.Lock()
+						numDead := len(failedSet)
+						deadCopy := make(map[string]bool, numDead)
+						for k, v := range failedSet {
+							deadCopy[k] = v
+						}
+						failedMu.Unlock()
+						if numDead > 0 {
+							valid := st.pool.Valid()
+							var survivors []*proxy.Proxy
+							for _, p := range valid {
+								if !deadCopy[p.Address()] {
+									survivors = append(survivors, p)
+								}
+							}
+							st.pool.SetValid(survivors)
+							st.validMu.Lock()
+							st.validRows = st.validRows[:0]
+							for _, p := range survivors {
+								st.validRows = append(st.validRows, p.DisplayValid())
+							}
+							st.validMu.Unlock()
+							if st.refreshValidList != nil {
+								st.refreshValidList()
+							}
+							if st.refreshCounts != nil {
+								st.refreshCounts()
+							}
+							appendLog(fmt.Sprintf("[=] Pruned %d dead proxy/proxies from pool (%d remaining)\n",
+								numDead, len(survivors)))
+						}
+
 						if ctx.Err() == nil {
 							total := int(totalOpenAtomic.Load())
 							if total == 0 {
@@ -1163,33 +1554,6 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							appendLog(fmt.Sprintf("[+] Total: %d open port(s) on %s\n", total, target))
 						}
 
-					} else {
-						// Single proxy — use Go TCP connect through SOCKS proxy.
-						// nmap --proxies silently falls back to direct on macOS;
-						// Go native SOCKS5/4 has no fallback.
-						scanProgressBind.Set(0)
-						singleLabel := proxyViaLabel(px)
-						appendLog(fmt.Sprintf("[*] TCP scan  %s  ports:%s  via %s\n", target, portSpec, singleLabel))
-						getP := func() *proxy.Proxy { return px }
-						open, f1 := guiBuiltinScan(ctx, getP, target, portSpec, conc, to,
-							scanProgressBind, appendLog, singleLabel)
-						targetFindings = append(targetFindings, f1...)
-						appendLog(fmt.Sprintf("[+] %d open port(s) on %s\n", open, target))
-						if open == 0 {
-							appendLog("[!] 0 open ports — host may be down or all ports filtered.\n")
-							if commonPortsCheck.Checked {
-								appendLog("[*] Retrying with common ports...\n")
-								retryPorts := mergeCommonPorts(portSpec)
-								open2, f2 := guiBuiltinScan(ctx, getP, target, retryPorts, conc, to,
-									scanProgressBind, appendLog, singleLabel)
-								targetFindings = append(targetFindings, f2...)
-								appendLog(fmt.Sprintf("[+] Retry: %d open port(s) on %s\n", open2, target))
-								if open2 == 0 {
-									appendLog("[!] Still 0 open ports.\n")
-								}
-							}
-						}
-						scanProgressBind.Set(1.0)
 					}
 
 				default: // custom
@@ -1233,7 +1597,15 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							displayLine = f.Host + "  " + f.Line
 						}
 						appendLog("  ► OPEN  " + displayLine + "\n")
-						if f.ProxyURI != "" {
+						if len(f.Proxies) > 0 {
+							for vi, lbl := range f.Proxies {
+								branch := "├─"
+								if vi == len(f.Proxies)-1 {
+									branch = "└─"
+								}
+								appendLog("      " + branch + " via " + lbl + "\n")
+							}
+						} else if f.ProxyURI != "" {
 							appendLog("      └─ via " + f.ProxyURI + "\n")
 						}
 					}
@@ -1254,7 +1626,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 		widget.NewSeparator(),
 		widget.NewLabel("Completed:"), countLabel,
 		layout.NewSpacer(),
-		rotateCheck, rotatePerPortCheck, wrapCheck, commonPortsCheck,
+		rotateCheck, wrapCheck,
 	)
 
 	logButtons := container.NewHBox(
@@ -1315,62 +1687,111 @@ func runExternalTool(ctx context.Context, _ fyne.Window, _ *state,
 // ── Hosts tab ─────────────────────────────────────────────────────────────────
 
 func buildHostsTab(st *state) fyne.CanvasObject {
-	var selectedIdx atomic.Int32
-	selectedIdx.Store(-1)
+	var selHost atomic.Int32
+	var selPort atomic.Int32
+	selHost.Store(-1)
+	selPort.Store(-1)
 
 	monoStyle := widget.RichTextStyle{TextStyle: fyne.TextStyle{Monospace: true}}
 	headerStyle := widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true, Monospace: true}}
-	openStyle := widget.RichTextStyle{
+	viaStyle := widget.RichTextStyle{
 		TextStyle: fyne.TextStyle{Monospace: true},
 		ColorName: theme.ColorNameSuccess,
 	}
 
+	// ── Port-detail pane (right): full proxy list for the selected port ──
 	detailRich := widget.NewRichText()
 	detailRich.Wrapping = fyne.TextWrapOff
 	detailScroll := container.NewVScroll(detailRich)
 
-	showDetail := func(idx int) {
+	showPortDetail := func(hostIdx, portIdx int) {
 		st.hostsMu.RLock()
 		defer st.hostsMu.RUnlock()
-		if idx < 0 || idx >= len(st.hostsSlice) {
+		if hostIdx < 0 || hostIdx >= len(st.hostsSlice) {
 			detailRich.Segments = []widget.RichTextSegment{
-				&widget.TextSegment{
-					Text:  "← Select a host from the list to view port details",
-					Style: monoStyle,
-				},
+				&widget.TextSegment{Text: "← Select a host, then a port", Style: monoStyle},
 			}
 			detailRich.Refresh()
 			return
 		}
-		h := st.hostsSlice[idx]
-		var segs []widget.RichTextSegment
-
-		segs = append(segs, &widget.TextSegment{
-			Text:  fmt.Sprintf("Host: %s   —   %d open port(s)\n", h.IP, len(h.Findings)),
-			Style: headerStyle,
-		})
-		segs = append(segs, &widget.TextSegment{Text: strings.Repeat("─", 76) + "\n", Style: monoStyle})
-		segs = append(segs, &widget.TextSegment{
-			Text:  fmt.Sprintf("%-12s %-22s %-32s %s\n", "PORT", "SERVICE", "VERSION", "VIA"),
-			Style: headerStyle,
-		})
-		segs = append(segs, &widget.TextSegment{Text: strings.Repeat("─", 76) + "\n", Style: monoStyle})
-
-		for _, f := range h.Findings {
-			pd := parsePortLine(f.Line)
-			portProto := pd.Port + "/" + pd.Proto
-			segs = append(segs, &widget.TextSegment{
-				Text: fmt.Sprintf("%-12s %-22s %-32s %s\n",
-					portProto, pd.Service, pd.Version, f.ProxyURI),
-				Style: openStyle,
-			})
+		h := st.hostsSlice[hostIdx]
+		if portIdx < 0 || portIdx >= len(h.Ports) {
+			detailRich.Segments = []widget.RichTextSegment{
+				&widget.TextSegment{Text: "↑ Select a port to see every proxy that validated it", Style: monoStyle},
+			}
+			detailRich.Refresh()
+			return
 		}
-
+		pe := h.Ports[portIdx]
+		var segs []widget.RichTextSegment
+		segs = append(segs, &widget.TextSegment{
+			Text:  fmt.Sprintf("%d/%s   %s\n", pe.Port, pe.Proto, pe.Service),
+			Style: headerStyle,
+		})
+		if pe.Version != "" {
+			segs = append(segs, &widget.TextSegment{Text: "version: " + pe.Version + "\n", Style: monoStyle})
+		}
+		if pe.Banner != "" {
+			segs = append(segs, &widget.TextSegment{Text: "banner:  " + pe.Banner + "\n", Style: monoStyle})
+		}
+		segs = append(segs, &widget.TextSegment{Text: strings.Repeat("─", 60) + "\n", Style: monoStyle})
+		segs = append(segs, &widget.TextSegment{
+			Text:  fmt.Sprintf("validated by %d proxy/proxies:\n", len(pe.Proxies)),
+			Style: headerStyle,
+		})
+		for _, p := range pe.Proxies {
+			segs = append(segs, &widget.TextSegment{Text: "  " + p + "\n", Style: viaStyle})
+		}
 		detailRich.Segments = segs
 		detailRich.Refresh()
 	}
-	showDetail(-1)
 
+	// ── Port list (middle): one row per open port, deduped ──
+	var portList *widget.List
+	portList = widget.NewList(
+		func() int {
+			st.hostsMu.RLock()
+			defer st.hostsMu.RUnlock()
+			hi := int(selHost.Load())
+			if hi < 0 || hi >= len(st.hostsSlice) {
+				return 0
+			}
+			return len(st.hostsSlice[hi].Ports)
+		},
+		func() fyne.CanvasObject {
+			l := widget.NewLabel("")
+			l.TextStyle = fyne.TextStyle{Monospace: true}
+			return l
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			st.hostsMu.RLock()
+			defer st.hostsMu.RUnlock()
+			hi := int(selHost.Load())
+			if hi < 0 || hi >= len(st.hostsSlice) {
+				return
+			}
+			ports := st.hostsSlice[hi].Ports
+			if int(id) >= len(ports) {
+				return
+			}
+			pe := ports[id]
+			detail := pe.Version
+			if detail == "" {
+				detail = pe.Banner
+			}
+			if len(detail) > 24 {
+				detail = detail[:24] + "…"
+			}
+			obj.(*widget.Label).SetText(fmt.Sprintf("%-10s %-14s %-26s (%d proxies)",
+				fmt.Sprintf("%d/%s", pe.Port, pe.Proto), pe.Service, detail, len(pe.Proxies)))
+		},
+	)
+	portList.OnSelected = func(id widget.ListItemID) {
+		selPort.Store(int32(id))
+		showPortDetail(int(selHost.Load()), int(id))
+	}
+
+	// ── Host list (left) ──
 	var hostList *widget.List
 	hostList = widget.NewList(
 		func() int {
@@ -1386,27 +1807,36 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 			defer st.hostsMu.RUnlock()
 			if int(id) < len(st.hostsSlice) {
 				h := st.hostsSlice[id]
-				obj.(*widget.Label).SetText(fmt.Sprintf("%s   (%d open)", h.IP, len(h.Findings)))
+				obj.(*widget.Label).SetText(fmt.Sprintf("%s   (%d open)", h.IP, len(h.Ports)))
 			}
 		},
 	)
 	hostList.OnSelected = func(id widget.ListItemID) {
-		selectedIdx.Store(int32(id))
-		showDetail(int(id))
+		selHost.Store(int32(id))
+		selPort.Store(-1)
+		portList.UnselectAll()
+		portList.Refresh()
+		showPortDetail(int(id), -1)
 	}
 
 	st.hostsRefresh = func() {
 		hostList.Refresh()
-		if idx := int(selectedIdx.Load()); idx >= 0 {
-			showDetail(idx)
+		portList.Refresh()
+		if hi := int(selHost.Load()); hi >= 0 {
+			showPortDetail(hi, int(selPort.Load()))
 		}
 	}
+	showPortDetail(-1, -1)
 
 	btnClear := widget.NewButton("Clear All", func() {
 		st.clearHosts()
-		selectedIdx.Store(-1)
+		selHost.Store(-1)
+		selPort.Store(-1)
+		hostList.UnselectAll()
+		portList.UnselectAll()
 		hostList.Refresh()
-		showDetail(-1)
+		portList.Refresh()
+		showPortDetail(-1, -1)
 	})
 
 	leftPanel := container.NewBorder(
@@ -1419,14 +1849,23 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 		hostList,
 	)
 
+	midPanel := container.NewBorder(
+		widget.NewLabelWithStyle("Open Ports", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		nil, nil, nil,
+		portList,
+	)
+
 	rightPanel := container.NewBorder(
-		widget.NewLabelWithStyle("Port Details", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Validating Proxies", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		nil, nil, nil,
 		detailScroll,
 	)
 
-	split := container.NewHSplit(leftPanel, rightPanel)
-	split.Offset = 0.22
+	// hosts | ports | proxies
+	inner := container.NewHSplit(midPanel, rightPanel)
+	inner.Offset = 0.5
+	split := container.NewHSplit(leftPanel, inner)
+	split.Offset = 0.2
 	return split
 }
 
@@ -1448,21 +1887,8 @@ func buildSettingsTab(st *state) fyne.CanvasObject {
 	wrapCheck := widget.NewCheck("Wrap proxy pool when exhausted", nil)
 	wrapCheck.SetChecked(st.wrap)
 
-	saveBtn := widget.NewButton("Save Settings", func() {
-		if n, err := strconv.Atoi(threadsEntry.Text); err == nil && n > 0 {
-			st.threads = n
-		}
-		if f, err := strconv.ParseFloat(timeoutEntry.Text, 64); err == nil && f > 0 {
-			st.timeout = f
-		}
-		if h := strings.TrimSpace(testHostEntry.Text); h != "" {
-			st.testHost = h
-		}
-		if n, err := strconv.Atoi(testPortEntry.Text); err == nil && n > 0 {
-			st.testPort = n
-		}
-		st.wrap = wrapCheck.Checked
-	})
+	// Handler is assigned below, after the auto-revalidation widgets exist.
+	saveBtn := widget.NewButton("Save Settings", nil)
 
 	// ── nmap detection section ──────────────────────────────────────────────
 	nmapStatusBind := binding.NewString()
@@ -1521,9 +1947,53 @@ func buildSettingsTab(st *state) fyne.CanvasObject {
 		widget.NewLabel(""), wrapCheck,
 	)
 
+	// ── auto-revalidation ────────────────────────────────────────────────────
+	autoRevalCheck := widget.NewCheck("Auto-revalidate pool on interval", nil)
+	autoRevalMinsEntry := widget.NewEntry()
+	autoRevalMinsEntry.SetText("30")
+	autoRevalMinsEntry.SetPlaceHolder("minutes")
+
+	revalStatusLabel := widget.NewLabelWithData(st.revalStatus)
+	revalStatusLabel.Wrapping = fyne.TextWrapWord
+
+	autoRevalForm := container.New(layout.NewFormLayout(),
+		widget.NewLabel("Enabled:"), autoRevalCheck,
+		widget.NewLabel("Interval (minutes):"), autoRevalMinsEntry,
+		widget.NewLabel("Status:"), revalStatusLabel,
+	)
+
+	saveBtn.OnTapped = func() {
+		if n, err := strconv.Atoi(threadsEntry.Text); err == nil && n > 0 {
+			st.threads = n
+		}
+		if f, err := strconv.ParseFloat(timeoutEntry.Text, 64); err == nil && f > 0 {
+			st.timeout = f
+		}
+		if h := strings.TrimSpace(testHostEntry.Text); h != "" {
+			st.testHost = h
+		}
+		if n, err := strconv.Atoi(testPortEntry.Text); err == nil && n > 0 {
+			st.testPort = n
+		}
+		st.wrap = wrapCheck.Checked
+
+		if autoRevalCheck.Checked {
+			mins, _ := strconv.Atoi(autoRevalMinsEntry.Text)
+			if mins <= 0 {
+				mins = 30
+			}
+			st.startAutoReval(time.Duration(mins) * time.Minute)
+			st.revalStatus.Set(fmt.Sprintf("Revalidation scheduled every %d min", mins))
+		} else {
+			st.stopAutoReval()
+			st.revalStatus.Set("Disabled")
+		}
+	}
+
 	return container.NewVBox(
 		widget.NewCard("nmap", "Required for nmap scanning mode", nmapForm),
 		widget.NewCard("Validation & Pool", "", valForm),
+		widget.NewCard("Auto-Revalidation", "Periodically re-check the pool and drop dead proxies", autoRevalForm),
 		saveBtn,
 	)
 }

@@ -34,11 +34,13 @@ var openPortRE = regexp.MustCompile(`(\d+)/(tcp|udp)\s+open`)
 // nmapReportRE matches "Nmap scan report for 1.2.3.4" or "Nmap scan report for hostname (1.2.3.4)"
 var nmapReportRE = regexp.MustCompile(`Nmap scan report for (\S+)`)
 
-// Finding records a single open-port result from an nmap scan.
+// Finding records a single open-port result from a scan.
 type Finding struct {
-	Host     string // IP/hostname from "Nmap scan report for X" (empty if unknown)
-	Line     string // raw nmap port line, e.g. "80/tcp   open  http Apache..."
-	ProxyURI string // proxy that discovered this port
+	Host     string   // IP/hostname from "Nmap scan report for X" (empty if unknown)
+	Line     string   // port line: "80/tcp   open  http" or full nmap line
+	ProxyURI string   // primary proxy that discovered this port
+	Proxies  []string // all proxies that agreed the port is open (quorum)
+	Banner   string   // service banner grabbed at connect time (may be empty)
 }
 
 // PortDetail holds parsed fields from a nmap/built-in port line.

@@ -249,6 +249,10 @@ func RunFlatMode(args []string) {
 }
 
 func writeOutputFile(path, format string, results []ScanResult) error {
+	// "-" is the Unix convention for stdout.
+	if path == "-" {
+		return WriteResults(os.Stdout, results, format)
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -271,7 +275,7 @@ func flatRunNmap(ctx context.Context, px *proxy.Proxy, target string,
 
 	fmt.Fprintf(os.Stderr, "[*] nmap  %s  relay:%s → %s\n", target, proxyArg, px.URI())
 
-	cmd := buildFlatNmapCmd(nmapBin, proxyArg, target, nmapExtra, false)
+	cmd := buildFlatNmapCmd(nmapBin, proxyArg, target, nmapExtra, true)
 	results, hostDown := execFlatNmap(ctx, cmd, px.URI())
 	fmt.Fprintf(os.Stderr, "[+] %d open port(s)\n", len(results))
 
@@ -396,8 +400,22 @@ func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
 	var results []ScanResult
 	for r := range resCh {
 		if r.Open {
-			fmt.Printf("  ► OPEN  %s:%d\n", r.Host, r.Port)
-			results = append(results, ScanResult{Host: r.Host, Port: r.Port, Proto: "tcp"})
+			svc := scanner.PortService(r.Port)
+			if svc == "" {
+				svc = "unknown"
+			}
+			fmt.Printf("  ► OPEN  %s:%d  [%s]", r.Host, r.Port, svc)
+			if r.Banner != "" {
+				fmt.Printf("  %s", r.Banner)
+			}
+			fmt.Println()
+			results = append(results, ScanResult{
+				Host:    r.Host,
+				Port:    r.Port,
+				Proto:   "tcp",
+				Service: svc,
+				Banner:  r.Banner,
+			})
 		}
 	}
 	fmt.Fprintln(os.Stderr)
@@ -419,7 +437,7 @@ PROXY-MANAGER FLAGS
   -proxlist <file>     Proxy list file (socks4/5://host:port, one per line)
   -ip <host>           Target host, IP, or CIDR  (also accepted as positional)
   -p <ports>           Port spec: "80,443"  "1-1024"  (forwarded to nmap too)
-  -out <file>          Output file path
+  -out <file>          Output file path; use "-" for stdout
   -type <fmt>          Output format: txt | json | xml | csv  (default: txt)
   -tool <name>         Scanner: nmap | builtin  (default: nmap)
   -conc <N>            Concurrency for builtin scanner  (default: 200)

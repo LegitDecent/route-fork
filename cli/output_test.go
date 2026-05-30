@@ -138,7 +138,7 @@ func TestWriteResultsCSV(t *testing.T) {
 	if len(lines) != 4 {
 		t.Errorf("CSV: got %d lines, want 4 (header + 3 results)", len(lines))
 	}
-	if lines[0] != "host,port,proto,service,version,proxy" {
+	if lines[0] != "host,port,proto,service,version,banner,proxy" {
 		t.Errorf("CSV header = %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], "192.168.1.1,80,tcp") {

@@ -254,3 +254,47 @@ func socks4Handshake(conn net.Conn, host string, port int) (bool, string) {
 	}
 	return false, fmt.Sprintf("SOCKS4 code %#02x", resp[1])
 }
+
+// IsProxyError reports whether err indicates the PROXY failed (so a retry through
+// a different proxy is warranted) rather than the target port being closed or
+// filtered (a real scan result that should be reported as-is).
+//
+// It is deliberately conservative: only a proxy we can't reach, or one that
+// isn't behaving like a SOCKS server, counts as a proxy error. A closed port
+// ("connection refused"), an unreachable/filtered target, a SOCKS4 rejection,
+// or a missing CONNECT response (target dropping packets) are all treated as
+// genuine results — so a closed/filtered target never churns or prunes the pool.
+func IsProxyError(proxyAddr string, err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	sl := strings.ToLower(s)
+
+	// Couldn't reach the proxy at all (refused or timed out dialing IT).
+	if strings.Contains(s, "dial tcp "+proxyAddr) {
+		return true
+	}
+	// Proxy accepted the TCP connection but misbehaved mid-handshake: not a
+	// real SOCKS server, auth problem, or it reset/closed the connection /
+	// never returned a CONNECT reply. Over SOCKS we never touch the target
+	// directly, so a reset/EOF/no-reply on our proxy socket is the PROXY's
+	// fault — not evidence the target port is closed. A genuinely closed port
+	// comes back as a proper SOCKS "connection refused" (handled below).
+	for _, sig := range []string{
+		"not a socks5 server",
+		"auth",
+		"connection reset by peer",
+		"no connect response",
+		"broken pipe",
+		"eof",
+	} {
+		if strings.Contains(sl, sig) {
+			return true
+		}
+	}
+	// Everything else is a real target-side result — the proxy worked:
+	// "connection refused" (port closed), "host/network unreachable",
+	// SOCKS4 "request rejected". Report as-is, don't retry.
+	return false
+}

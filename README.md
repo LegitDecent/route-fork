@@ -13,12 +13,17 @@ Routes nmap (or its own built-in TCP scanner) through rotating proxy pools, no p
 
 ## Features
 
-- **GUI** — proxy validator, scanner, Zenmap-style Hosts tab, real-time log
+- **GUI** — proxy validator, scanner, Zenmap-style Hosts tab with drill-down, real-time log
 - **CLI** — nmap-style flat interface; unknown flags pass straight through to nmap in nmap mode
+- **Scan modes** — Fast / Confirmed / Paranoid: require 1, 2, or 3 proxies to independently
+  agree a port is open, defeating proxies that fake a successful connection (false positives)
+- **Service + banner detection** — common-port service names plus a live banner grab
+  (SSH version, FTP/IMAP/POP3 greetings, etc.)
 - **nmap integration** — local SOCKS4↔SOCKS5 relay so nmap works without proxychains
 - **Built-in TCP scanner** — pure Go, zero dependencies, works when nmap isn't available
-- **Proxy rotation** — per-scan, per-port, or parallel chunk rotation across the pool
-- **Output formats** — txt, json, xml, csv
+- **Self-healing pool** — dead proxies are retried-past and pruned mid-scan; optional
+  auto-revalidation re-checks the pool on an interval
+- **Output formats** — txt, json, xml, csv (CLI `-out -` streams to stdout for piping)
 
 ---
 
@@ -78,7 +83,7 @@ rofk -proxlist <file> -ip <target> [options] [nmap-flags...]
 | `-proxlist file` | Proxy list (one per line: `socks5://host:port`, `host:port`, etc.) |
 | `-ip host` | Target host, IP, or CIDR. Also accepted as a positional arg. |
 | `-p ports` | Port spec: `80,443` or `1-1024`. Forwarded to nmap too. |
-| `-out file` | Output file path |
+| `-out file` | Output file path; use `-` for stdout |
 | `-type fmt` | `txt` (default) · `json` · `xml` · `csv` |
 | `-tool name` | `nmap` (default) · `builtin` |
 | `-timeout sec` | Connect timeout (default: 5) |
@@ -123,9 +128,9 @@ rofk
 ```
 
 **Proxies tab** — paste or import proxy lists, validate concurrently, export live proxies.  
-**Scanner tab** — configure target, ports, tool, timing presets (T3/T4/T5), rotate options, real-time log.  
-**Hosts tab** — Zenmap-style view: click a discovered IP to see open ports, services, versions, and which proxy found them.  
-**Settings tab** — nmap path detection and configuration, validation settings.
+**Scanner tab** — configure target, ports (with an "add common ports" toggle), timing presets (T3/T4/T5), and **Scan mode** (Fast/Confirmed/Paranoid open-port confirmation), with a real-time log.  
+**Hosts tab** — Zenmap-style three-pane drill-down: pick a host → see its deduplicated open ports → click a port to list every proxy that validated it, with service, version, and banner.  
+**Settings tab** — nmap path detection, validation settings, and auto-revalidation interval.
 
 ---
 

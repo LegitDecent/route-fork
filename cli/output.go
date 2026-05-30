@@ -15,6 +15,7 @@ type ScanResult struct {
 	Proto   string `json:"proto"             xml:"protocol,attr"`
 	Service string `json:"service,omitempty" xml:"service,attr,omitempty"`
 	Version string `json:"version,omitempty" xml:"version,attr,omitempty"`
+	Banner  string `json:"banner,omitempty"  xml:"banner,attr,omitempty"`
 	Proxy   string `json:"proxy,omitempty"   xml:"proxy,attr,omitempty"`
 }
 
@@ -43,6 +44,9 @@ func writeTXT(w io.Writer, results []ScanResult) error {
 		if r.Version != "" {
 			line += "  " + r.Version
 		}
+		if r.Banner != "" {
+			line += "  [" + r.Banner + "]"
+		}
 		if r.Proxy != "" {
 			line += "  via " + r.Proxy
 		}
@@ -54,13 +58,13 @@ func writeTXT(w io.Writer, results []ScanResult) error {
 }
 
 func writeCSV(w io.Writer, results []ScanResult) error {
-	if _, err := fmt.Fprintln(w, "host,port,proto,service,version,proxy"); err != nil {
+	if _, err := fmt.Fprintln(w, "host,port,proto,service,version,banner,proxy"); err != nil {
 		return err
 	}
 	for _, r := range results {
-		if _, err := fmt.Fprintf(w, "%s,%d,%s,%s,%s,%s\n",
+		if _, err := fmt.Fprintf(w, "%s,%d,%s,%s,%s,%s,%s\n",
 			csvEsc(r.Host), r.Port, r.Proto,
-			csvEsc(r.Service), csvEsc(r.Version), csvEsc(r.Proxy),
+			csvEsc(r.Service), csvEsc(r.Version), csvEsc(r.Banner), csvEsc(r.Proxy),
 		); err != nil {
 			return err
 		}
@@ -93,6 +97,7 @@ type xmlPort struct {
 	State    string `xml:"state,attr"`
 	Service  string `xml:"service,attr,omitempty"`
 	Version  string `xml:"version,attr,omitempty"`
+	Banner   string `xml:"banner,attr,omitempty"`
 	Proxy    string `xml:"proxy,attr,omitempty"`
 }
 
@@ -110,6 +115,7 @@ func writeXML(w io.Writer, results []ScanResult) error {
 			State:    "open",
 			Service:  r.Service,
 			Version:  r.Version,
+			Banner:   r.Banner,
 			Proxy:    r.Proxy,
 		})
 	}

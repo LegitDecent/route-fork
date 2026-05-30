@@ -293,7 +293,7 @@ func runNmap(ctx context.Context, px *proxy.Proxy, target, ports, extra string,
 	fmt.Fprintf(os.Stderr, "[*] nmap scan  %s  ports:%s  relay:%s → %s\n",
 		target, ports, proxyArg, px.URI())
 
-	open, hostDown := execNmapParsed(ctx, buildNmapArgv(ports, extra, proxyArg, target, false))
+	open, hostDown := execNmapParsed(ctx, buildNmapArgv(ports, extra, proxyArg, target, true))
 
 	fmt.Fprintf(os.Stderr, "[+] %d open port(s) on %s\n", open, target)
 

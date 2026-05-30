@@ -454,3 +454,37 @@ func TestValidateDeadProxy(t *testing.T) {
 		t.Error("Validate to dead proxy should return false")
 	}
 }
+
+// ── IsProxyError ──────────────────────────────────────────────────────────────
+
+func TestIsProxyError(t *testing.T) {
+	const addr = "1.2.3.4:1080"
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		// proxy-side → retry
+		{"cannot reach proxy", fmt.Errorf("dial tcp %s: connect: connection refused", addr), true},
+		{"proxy dial timeout", fmt.Errorf("dial tcp %s: i/o timeout", addr), true},
+		{"not a socks server", fmt.Errorf("not a SOCKS5 server"), true},
+		{"auth required", fmt.Errorf("auth required but no credentials"), true},
+		{"auth failed", fmt.Errorf("authentication failed"), true},
+		// proxy dropped us mid-handshake → retry (not evidence about the target)
+		{"reset by peer", fmt.Errorf("read tcp 192.168.1.201:64337->%s: read: connection reset by peer", addr), true},
+		{"no connect response", fmt.Errorf("no CONNECT response"), true},
+		{"broken pipe", fmt.Errorf("write: broken pipe"), true},
+		{"eof", fmt.Errorf("EOF"), true},
+		// target-side → do NOT retry (real scan result)
+		{"target refused", fmt.Errorf("connection refused"), false},
+		{"host unreachable", fmt.Errorf("host unreachable"), false},
+		{"network unreachable", fmt.Errorf("network unreachable"), false},
+		{"socks4 rejected", fmt.Errorf("request rejected"), false},
+		{"nil error", nil, false},
+	}
+	for _, tc := range cases {
+		if got := IsProxyError(addr, tc.err); got != tc.want {
+			t.Errorf("%s: IsProxyError(%v) = %v, want %v", tc.name, tc.err, got, tc.want)
+		}
+	}
+}
