@@ -590,6 +590,16 @@ func mergeCommonPorts(spec string) string {
 
 // nmapCmd builds the nmap argv slice.
 // bin is the nmap binary path (use cli.FindNmap to resolve it).
+// proxyViaLabel returns the display label for a proxy in scan output.
+// When an egress IP is known (from validation) it is shown alongside the
+// proxy address so the user can see what IP the target server actually sees.
+func proxyViaLabel(p *proxy.Proxy) string {
+	if p.EgressIP != "" {
+		return p.URI() + " [exit: " + p.EgressIP + "]"
+	}
+	return p.URI()
+}
+
 // target may be a single host/CIDR or space-separated IPs (for chunk rotation).
 // addPn=true adds -Pn (skip host discovery) for the retry pass.
 func nmapCmd(bin, ports, extra, proxyArg, target string, addPn bool) []string {
@@ -631,14 +641,18 @@ func guiBuiltinScan(ctx context.Context, getProxy func() *proxy.Proxy, target, p
 	for r := range results {
 		if r.Open {
 			open++
+			label := proxyLabel
+			if r.Proxy != nil {
+				label = proxyViaLabel(r.Proxy)
+			}
 			log(fmt.Sprintf("  ► OPEN  %s:%d\n", r.Host, r.Port))
-			if proxyLabel != "" {
-				log("      └─ via " + proxyLabel + "\n")
+			if label != "" {
+				log("      └─ via " + label + "\n")
 			}
 			findings = append(findings, Finding{
 				Host:     r.Host,
 				Line:     fmt.Sprintf("%d/tcp   open", r.Port),
-				ProxyURI: proxyLabel,
+				ProxyURI: label,
 			})
 		}
 	}
@@ -917,7 +931,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 					proxyLabel = fmt.Sprintf("[random from %d proxies]", len(snap))
 				} else {
 					getProxy = func() *proxy.Proxy { return px }
-					proxyLabel = px.URI()
+					proxyLabel = proxyViaLabel(px)
 				}
 
 				var targetFindings []Finding
@@ -981,7 +995,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 								return
 							}
 							extras := buildNmapExtras()
-							pArg, pStop, pErr := relay.NmapProxyArg(proxyX, to)
+							pArg, pStop, pErr := relay.NmapProxyArg(proxyX, to, appendLog)
 							if pErr != nil {
 								appendLog(fmt.Sprintf("[-] relay chunk %d: %v\n", idx, pErr))
 								return
@@ -1048,29 +1062,94 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 								appendLog(fmt.Sprintf("[-] Port spec error: %v\n", parseErr))
 								break
 							}
-							chunkSize := (len(ports) + n - 1) / n
-							appendLog(fmt.Sprintf("[*] nmap rotate  %s  %d ports / %d proxies  ~%d ports each  [parallel]\n",
-								target, len(ports), n, chunkSize))
-							for i := range snap {
-								if i*chunkSize >= len(ports) {
-									break
+							// Both rotation paths use Go-native SOCKS5/SOCKS4 dial —
+							// not nmap --proxies, which silently falls back to direct
+							// on macOS when the proxy rejects or times out.
+							if len(ports) <= n {
+								// More proxies than ports: one shuffled proxy per port.
+								shuffled := make([]*proxy.Proxy, len(snap))
+								copy(shuffled, snap)
+								rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+								chunksLaunched = len(ports)
+								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d port(s) / %d proxies  1 port each  [parallel]\n",
+									target, len(ports), n))
+								for i, port := range ports {
+									proxyX := shuffled[i]
+									label := proxyViaLabel(proxyX)
+									appendLog(fmt.Sprintf("[*] Port %d → %s\n", port, label))
+									chunkWg.Add(1)
+									go func(proxyX *proxy.Proxy, port int, label string) {
+										defer chunkWg.Done()
+										defer func() {
+											done := chunksDone.Add(1)
+											if chunksLaunched > 0 {
+												scanProgressBind.Set(float64(done) / float64(chunksLaunched))
+											}
+										}()
+										if ctx.Err() != nil {
+											return
+										}
+										conn, err := proxy.DialThroughProxy(proxyX, target, port, to)
+										if err != nil {
+											appendLog(fmt.Sprintf("[!] Port %d closed/filtered via %s (%v)\n", port, label, err))
+											return
+										}
+										conn.Close()
+										totalOpenAtomic.Add(1)
+										portLine := fmt.Sprintf("%d/tcp   open  unknown", port)
+										appendLog("  ► OPEN  " + portLine + "\n")
+										appendLog("      └─ via " + label + "\n")
+										findingsMu.Lock()
+										targetFindings = append(targetFindings, Finding{Host: target, Line: portLine, ProxyURI: label})
+										findingsMu.Unlock()
+									}(proxyX, port, label)
 								}
-								chunksLaunched++
-							}
-
-							for i, proxyX := range snap {
-								start := i * chunkSize
-								if start >= len(ports) {
-									break
+							} else {
+								// More ports than proxies: chunk ports across proxies.
+								chunkSize := (len(ports) + n - 1) / n
+								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d ports / %d proxies  ~%d ports each  [parallel]\n",
+									target, len(ports), n, chunkSize))
+								for i := range snap {
+									if i*chunkSize >= len(ports) {
+										break
+									}
+									chunksLaunched++
 								}
-								end := start + chunkSize
-								if end > len(ports) {
-									end = len(ports)
+								for i, proxyX := range snap {
+									start := i * chunkSize
+									if start >= len(ports) {
+										break
+									}
+									end := start + chunkSize
+									if end > len(ports) {
+										end = len(ports)
+									}
+									chunk := scanner.CompressPorts(ports[start:end])
+									pxCopy := proxyX
+									chunkLabel := proxyViaLabel(pxCopy)
+									appendLog(fmt.Sprintf("[*] Chunk %d/%d  ports:%s  via %s\n", i+1, n, chunk, chunkLabel))
+									chunkWg.Add(1)
+									go func(pxCopy *proxy.Proxy, chunk, chunkLabel string, idx int) {
+										defer chunkWg.Done()
+										defer func() {
+											done := chunksDone.Add(1)
+											if chunksLaunched > 0 {
+												scanProgressBind.Set(float64(done) / float64(chunksLaunched))
+											}
+										}()
+										if ctx.Err() != nil {
+											return
+										}
+										getP := func() *proxy.Proxy { return pxCopy }
+										open, chunkF := guiBuiltinScan(ctx, getP, target, chunk, 50, to,
+											binding.NewFloat(), appendLog, chunkLabel)
+										totalOpenAtomic.Add(int64(open))
+										findingsMu.Lock()
+										targetFindings = append(targetFindings, chunkF...)
+										findingsMu.Unlock()
+										appendLog(fmt.Sprintf("[+] Chunk %d/%d: %d open\n", idx, n, open))
+									}(pxCopy, chunk, chunkLabel, i+1)
 								}
-								chunk := scanner.CompressPorts(ports[start:end])
-								appendLog(fmt.Sprintf("[*] Chunk %d/%d  ports:%s  via %s\n", i+1, n, chunk, proxyX.URI()))
-								chunkWg.Add(1)
-								go runChunk(i+1, proxyX, target, chunk)
 							}
 						}
 
@@ -1085,46 +1164,32 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 						}
 
 					} else {
-						// Single proxy nmap with auto-retry
-						proxyArg, stop, err := relay.NmapProxyArg(px, to)
-						if err != nil {
-							appendLog(fmt.Sprintf("[-] relay: %v\n", err))
-							break
-						}
-						extras := buildNmapExtras()
+						// Single proxy — use Go TCP connect through SOCKS proxy.
+						// nmap --proxies silently falls back to direct on macOS;
+						// Go native SOCKS5/4 has no fallback.
 						scanProgressBind.Set(0)
-
-						cmd1 := nmapCmd(nmapBin, portSpec, extras, proxyArg, target, false)
-						appendLog("  CMD: " + strings.Join(cmd1, " ") + "\n")
-						open, hostDown, f1 := execNmapParsed(ctx, cmd1, px.URI(), appendLog)
+						singleLabel := proxyViaLabel(px)
+						appendLog(fmt.Sprintf("[*] TCP scan  %s  ports:%s  via %s\n", target, portSpec, singleLabel))
+						getP := func() *proxy.Proxy { return px }
+						open, f1 := guiBuiltinScan(ctx, getP, target, portSpec, conc, to,
+							scanProgressBind, appendLog, singleLabel)
 						targetFindings = append(targetFindings, f1...)
 						appendLog(fmt.Sprintf("[+] %d open port(s) on %s\n", open, target))
-
 						if open == 0 {
-							scanProgressBind.Set(0.5)
-							if hostDown {
-								appendLog("[!] nmap says host seems down (blocking ping probes).\n")
-							} else {
-								appendLog("[!] 0 open ports found on initial scan.\n")
-							}
-							retryPorts := portSpec
+							appendLog("[!] 0 open ports — host may be down or all ports filtered.\n")
 							if commonPortsCheck.Checked {
-								retryPorts = mergeCommonPorts(portSpec)
-								appendLog("[*] Retrying with -Pn + common ports...\n")
-							} else {
-								appendLog("[*] Retrying with -Pn on same ports...\n")
-							}
-							cmd2 := nmapCmd(nmapBin, retryPorts, extras, proxyArg, target, true)
-							appendLog("  CMD: " + strings.Join(cmd2, " ") + "\n")
-							open2, _, f2 := execNmapParsed(ctx, cmd2, px.URI(), appendLog)
-							targetFindings = append(targetFindings, f2...)
-							appendLog(fmt.Sprintf("[+] Retry: %d open port(s) on %s\n", open2, target))
-							if open2 == 0 {
-								appendLog("[!] Still 0 open ports. Host may be down or all ports filtered.\n")
+								appendLog("[*] Retrying with common ports...\n")
+								retryPorts := mergeCommonPorts(portSpec)
+								open2, f2 := guiBuiltinScan(ctx, getP, target, retryPorts, conc, to,
+									scanProgressBind, appendLog, singleLabel)
+								targetFindings = append(targetFindings, f2...)
+								appendLog(fmt.Sprintf("[+] Retry: %d open port(s) on %s\n", open2, target))
+								if open2 == 0 {
+									appendLog("[!] Still 0 open ports.\n")
+								}
 							}
 						}
 						scanProgressBind.Set(1.0)
-						stop()
 					}
 
 				default: // custom

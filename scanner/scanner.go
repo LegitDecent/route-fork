@@ -18,9 +18,10 @@ import (
 )
 
 type Result struct {
-	Host string
-	Port int
-	Open bool
+	Host  string
+	Port  int
+	Open  bool
+	Proxy *proxy.Proxy // proxy that opened this connection (nil if direct)
 }
 
 type Options struct {
@@ -130,7 +131,8 @@ func Scan(ctx context.Context, getProxy func() *proxy.Proxy, target string, opts
 				defer wg.Done()
 				defer func() { <-sem }()
 
-				dialer, err := buildDialer(getProxy(), opts.Timeout)
+				px := getProxy()
+				dialer, err := buildDialer(px, opts.Timeout)
 				if err != nil {
 					scanned.Add(1)
 					return
@@ -155,7 +157,7 @@ func Scan(ctx context.Context, getProxy func() *proxy.Proxy, target string, opts
 					if conn != nil {
 						conn.Close()
 						select {
-						case results <- Result{Host: host, Port: port, Open: true}:
+						case results <- Result{Host: host, Port: port, Open: true, Proxy: px}:
 						case <-ctx.Done():
 						}
 					}

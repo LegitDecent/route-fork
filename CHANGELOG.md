@@ -4,6 +4,39 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [v1.3.0] — 2026-05-30
+
+### Fixed
+- **Proxy routing** — all scan traffic now flows through the SOCKS proxy. Previous
+  versions silently fell back to a direct connection whenever nmap's `--proxies`
+  path had any failure; the nmap path has been replaced with a pure-Go TCP connect
+  scan for all proxy-routing modes.
+- **Per-port rotation** — when "rotate proxy per port" is enabled and the port
+  count is smaller than the proxy pool, each port is now assigned a distinct,
+  randomly-selected proxy. Previously all ports went through the same proxy
+  (chunk-size math produced 1, loop broke on the second iteration).
+- **"Via" label accuracy** — the displayed proxy address now shows the actual
+  egress IP the target server sees (`[exit: x.x.x.x]` suffix), not the proxy
+  entry IP. Previously the label reflected whichever entry address was stored in
+  memory at display time, which could differ from the real exit node.
+- **Per-connection proxy tracking** — the built-in scanner now reports which exact
+  proxy each open port was found through instead of "one of N proxies".
+
+### Added
+- **Unit tests** — new test coverage across four packages:
+  - `proxy/validate_test.go` — `extractPublicIP`, `socks5Handshake`,
+    `socks4Handshake`, `DialThroughProxy`, `Validate`
+  - `relay/relay_test.go` — `socks4Reply`, `readUntilNull`,
+    `readStringUntilNull`, `socks5Connect`, `socks4aConnect`, relay forward
+    path (SOCKS5 and SOCKS4a upstream), SOCKS4a hostname request handling,
+    failure path (bare TCP close, no 0x5B), `Stop`, `NmapProxyArg`
+  - `scanner/scan_test.go` — `Scan` open port, closed port, `Result.Proxy`
+    field, progress callback, context cancellation, multi-port scan
+  - `pool/pool_test.go` — `SetValid` (replace, index reset, nil, isolation)
+- **CI** — GitHub Actions workflow runs `go test ./...` on every push and PR.
+
+---
+
 ## [v1.2.0] — 2026-05-30
 
 ### Changed

@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// dialThroughProxy opens a TCP tunnel to host:port through the SOCKS proxy.
+// DialThroughProxy opens a TCP tunnel to host:port through the SOCKS proxy.
 // After a successful return the connection is ready to carry application data.
-func dialThroughProxy(p *Proxy, host string, port int, timeout time.Duration) (net.Conn, error) {
+func DialThroughProxy(p *Proxy, host string, port int, timeout time.Duration) (net.Conn, error) {
 	conn, err := net.DialTimeout("tcp", p.Address(), timeout)
 	if err != nil {
 		return nil, err
@@ -31,19 +31,32 @@ func dialThroughProxy(p *Proxy, host string, port int, timeout time.Duration) (n
 	return conn, nil
 }
 
-// FetchEgressIP sends an HTTP request through the proxy to an IP-echo service
-// and returns the outbound IP the target actually sees.
-// On success p.EgressIP is populated. Tries two services before giving up.
+// FetchEgressIP sends HTTP requests through the proxy to IP-echo services and
+// returns the outbound IP the target actually sees. On success p.EgressIP is
+// populated.
+//
+// portquiz.net is tried first on port 8080 — this catches proxies that route
+// port 80 traffic direct (giving a false egress equal to the entry IP) while
+// tunnelling everything else through an upstream. Falling back to port-80
+// services covers proxies that block portquiz.net.
 func FetchEgressIP(p *Proxy, timeout time.Duration) (string, error) {
-	services := []string{"api.ipify.org", "checkip.amazonaws.com"}
-	for _, host := range services {
-		conn, err := dialThroughProxy(p, host, 80, timeout)
+	type svc struct {
+		host string
+		port int
+	}
+	services := []svc{
+		{"portquiz.net", 8080}, // non-80 — same routing path as scan traffic
+		{"api.ipify.org", 80},
+		{"checkip.amazonaws.com", 80},
+	}
+	for _, s := range services {
+		conn, err := DialThroughProxy(p, s.host, s.port, timeout)
 		if err != nil {
 			continue
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
-		req := "GET / HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
+		req := "GET / HTTP/1.0\r\nHost: " + s.host + "\r\nConnection: close\r\n\r\n"
 		if _, err = conn.Write([]byte(req)); err != nil {
 			conn.Close()
 			continue
@@ -63,18 +76,48 @@ func FetchEgressIP(p *Proxy, timeout time.Duration) (string, error) {
 		if total == 0 {
 			continue
 		}
-		// HTTP response: headers\r\n\r\nbody
+		// Strip HTTP headers
 		parts := strings.SplitN(string(buf[:total]), "\r\n\r\n", 2)
 		if len(parts) < 2 {
 			continue
 		}
-		ip := strings.TrimSpace(parts[1])
-		if net.ParseIP(ip) != nil {
+		if ip := extractPublicIP(parts[1]); ip != "" {
 			p.EgressIP = ip
 			return ip, nil
 		}
 	}
 	return "", fmt.Errorf("could not determine egress IP")
+}
+
+// extractPublicIP returns the first public IPv4 address found in text.
+// Handles bare-IP responses (api.ipify.org) and prose responses (portquiz.net).
+func extractPublicIP(text string) string {
+	// tokenise on anything that isn't a digit or dot
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return (r < '0' || r > '9') && r != '.'
+	})
+	for _, f := range fields {
+		ip := net.ParseIP(f)
+		if ip == nil {
+			continue
+		}
+		ip4 := ip.To4()
+		if ip4 == nil {
+			continue
+		}
+		// skip loopback, private, link-local, unspecified
+		switch {
+		case ip4[0] == 0:
+		case ip4[0] == 10:
+		case ip4[0] == 127:
+		case ip4[0] == 169 && ip4[1] == 254:
+		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
+		case ip4[0] == 192 && ip4[1] == 168:
+		default:
+			return f
+		}
+	}
+	return ""
 }
 
 // Validate performs a raw SOCKS4/5 handshake to verify the proxy is alive.

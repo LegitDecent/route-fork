@@ -179,3 +179,73 @@ func TestResetIndex(t *testing.T) {
 		t.Error("after ResetIndex: Next returned nil")
 	}
 }
+
+// ── SetValid ──────────────────────────────────────────────────────────────────
+
+func TestSetValidReplacesPool(t *testing.T) {
+	p := New()
+	p.AddValid(makeProxy("1.1.1.1", 1080))
+	p.AddValid(makeProxy("2.2.2.2", 1080))
+	p.Advance() // index = 1
+
+	newProxies := []*proxy.Proxy{
+		makeProxy("3.3.3.3", 1080),
+		makeProxy("4.4.4.4", 1080),
+	}
+	p.SetValid(newProxies)
+
+	if p.ValidCount() != 2 {
+		t.Errorf("after SetValid: count = %d, want 2", p.ValidCount())
+	}
+	got := p.Next(false)
+	if got == nil {
+		t.Fatal("after SetValid: Next returned nil")
+	}
+	if got.Host != "3.3.3.3" {
+		t.Errorf("after SetValid: Next().Host = %q, want 3.3.3.3", got.Host)
+	}
+}
+
+func TestSetValidResetsIndex(t *testing.T) {
+	p := New()
+	p.AddValid(makeProxy("1.1.1.1", 1080))
+	p.AddValid(makeProxy("2.2.2.2", 1080))
+	p.Advance() // advance past first
+	p.Advance() // now exhausted
+
+	p.SetValid([]*proxy.Proxy{makeProxy("5.5.5.5", 1080)})
+
+	got := p.Next(false)
+	if got == nil {
+		t.Error("after SetValid: Next returned nil — index was not reset")
+	}
+}
+
+func TestSetValidNilEmptiesPool(t *testing.T) {
+	p := New()
+	p.AddValid(makeProxy("1.1.1.1", 1080))
+	p.SetValid(nil)
+
+	if p.ValidCount() != 0 {
+		t.Errorf("SetValid(nil): count = %d, want 0", p.ValidCount())
+	}
+	if p.Next(false) != nil {
+		t.Error("SetValid(nil): Next should return nil")
+	}
+}
+
+func TestSetValidIsolation(t *testing.T) {
+	p := New()
+	src := []*proxy.Proxy{makeProxy("1.1.1.1", 1080)}
+	p.SetValid(src)
+
+	// Mutating the original slice must not affect the pool
+	src[0] = makeProxy("9.9.9.9", 9999)
+	snap := p.Valid()
+	if len(snap) == 0 {
+		t.Fatal("pool is empty after SetValid")
+	}
+	if snap[0].Host != "1.1.1.1" {
+		t.Errorf("SetValid did not copy slice — pool shows %q after source mutation", snap[0].Host)
+	}
+}

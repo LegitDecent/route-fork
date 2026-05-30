@@ -282,7 +282,8 @@ func mergeCommonPorts(spec string) string {
 func runNmap(ctx context.Context, px *proxy.Proxy, target, ports, extra string,
 	timeout time.Duration) {
 
-	proxyArg, stop, err := relay.NmapProxyArg(px, timeout)
+	stderrLog := func(s string) { fmt.Fprint(os.Stderr, s) }
+	proxyArg, stop, err := relay.NmapProxyArg(px, timeout, stderrLog)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[-] relay:", err)
 		return

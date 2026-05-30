@@ -1,5 +1,7 @@
 # Route Fork
 
+[![Tests](https://github.com/LegitDecent/route-fork/actions/workflows/ci.yml/badge.svg)](https://github.com/LegitDecent/route-fork/actions/workflows/ci.yml)
+
 > **Putting it plainly: this tool can take down servers if you use it like an idiot.**
 > It routes scans through proxy pools and can overwhelm connection tracking, SNAT, or fragile services if misconfigured.
 > **Use it only on systems you own or have explicit written permission to test. Don't be stupid.**

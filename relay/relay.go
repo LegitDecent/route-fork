@@ -23,16 +23,28 @@ type Relay struct {
 	ln      net.Listener
 	px      *proxy.Proxy
 	timeout time.Duration
+	logf    func(string) // optional; nil = silent
+}
+
+func (r *Relay) emit(format string, args ...interface{}) {
+	if r.logf != nil {
+		r.logf(fmt.Sprintf(format, args...))
+	}
 }
 
 // Start binds a random localhost port and begins serving.
 // Returns the relay and its local address ("127.0.0.1:port").
-func Start(px *proxy.Proxy, dialTimeout time.Duration) (*Relay, string, error) {
+// Pass a non-nil logf to receive diagnostic messages from the relay.
+func Start(px *proxy.Proxy, dialTimeout time.Duration, logf ...func(string)) (*Relay, string, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, "", err
 	}
-	r := &Relay{ln: ln, px: px, timeout: dialTimeout}
+	var lf func(string)
+	if len(logf) > 0 {
+		lf = logf[0]
+	}
+	r := &Relay{ln: ln, px: px, timeout: dialTimeout, logf: lf}
 	go r.serve()
 	return r, ln.Addr().String(), nil
 }
@@ -90,8 +102,11 @@ func (r *Relay) handle(client net.Conn) {
 	// ── Dial the real proxy and tunnel to target ──────────────────────────
 	upstream, err := r.dialUpstream(dstHost, int(dstPort))
 	if err != nil {
-		// SOCKS4 rejection reply
-		client.Write(socks4Reply(0x5B, dstPort, ipBytes))
+		// Do NOT send SOCKS4 rejection (0x5B) here.  nmap falls back to a
+		// direct connection when it receives 0x5B, which produces false
+		// positives (the scan appears to succeed from the user's real IP).
+		// A bare TCP close forces nmap to treat the port as unreachable.
+		r.emit("[-] relay: %s → %s:%d FAILED: %v\n", r.px.Address(), dstHost, dstPort, err)
 		return
 	}
 	defer upstream.Close()
@@ -100,6 +115,7 @@ func (r *Relay) handle(client net.Conn) {
 	if _, err := client.Write(socks4Reply(0x5A, dstPort, ipBytes)); err != nil {
 		return
 	}
+	r.emit("[~] relay: %s → %s:%d OK\n", r.px.Address(), dstHost, dstPort)
 
 	// Clear deadline before the bidirectional splice
 	client.SetDeadline(time.Time{})
@@ -282,8 +298,9 @@ func socks4Reply(code byte, port uint16, ip []byte) []byte {
 // NmapProxyArg starts the relay and returns the --proxies flag value
 // nmap should receive: "socks4://127.0.0.1:<port>".
 // Caller must call stop() when the scan finishes.
-func NmapProxyArg(px *proxy.Proxy, dialTimeout time.Duration) (arg string, stop func(), err error) {
-	r, addr, err := Start(px, dialTimeout)
+// Pass a non-nil logf to receive relay diagnostics (upstream failures, etc.).
+func NmapProxyArg(px *proxy.Proxy, dialTimeout time.Duration, logf ...func(string)) (arg string, stop func(), err error) {
+	r, addr, err := Start(px, dialTimeout, logf...)
 	if err != nil {
 		return "", nil, err
 	}
