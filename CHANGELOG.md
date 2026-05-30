@@ -4,6 +4,22 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [v1.2.0] — 2026-05-30
+
+### Changed
+- **Unknown egress = cut, not keep** — proxies where egress IP fetch fails are now
+  treated the same as confirmed duplicates. Their exit node is unknown and they
+  cannot be trusted. Previously they were silently kept; now they show as `[cut]`
+  in the cleanup dialog and are dropped when the user clicks Remove.
+- **GUI dialog triggers on unknowns too** — the cleanup dialog now appears whenever
+  there are unverified proxies, even if no duplicate egress groups exist.
+- **Dialog button** label now shows the total count being removed
+  (e.g. "Remove 7 Bad Proxies") instead of the generic "Remove Duplicates".
+- **CLI warning** — `rofk validate` separately reports the count of proxies with
+  no verifiable egress IP and tells you to remove them.
+
+---
+
 ## [v1.1.0] — 2026-05-30
 
 ### Added
