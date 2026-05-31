@@ -1182,16 +1182,19 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			wrap := wrapCheck.Checked
 			rotate := rotateCheck.Checked
 
+			// On a range / multi-target scan, a per-port closed/unreachable line
+			// would be thousands of log writes (one fyne.Do each) that freeze the
+			// UI and the Stop button. For those, log only OPEN ports.
+			quiet := len(targets) > 1
+			for _, t := range targets {
+				if strings.Contains(t, "/") {
+					quiet = true
+					break
+				}
+			}
 			// logOutcome renders a quorum verdict (findings are accumulated by RunScan).
 			logOutcome := func(oc scanner.PortOutcome) {
-				switch oc.Verdict {
-				case scanner.QuorumRefuted:
-					if oc.Confirmations > 0 {
-						appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s), treating as closed\n", oc.Port, oc.RefutedBy, oc.Confirmations))
-					} else {
-						appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", oc.Port, oc.RefutedBy))
-					}
-				case scanner.QuorumOpen:
+				if oc.Verdict == scanner.QuorumOpen {
 					svc := oc.Service
 					if svc == "" {
 						svc = scanner.PortService(oc.Port)
@@ -1212,6 +1215,18 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							branch = "└─"
 						}
 						appendLog("      " + branch + " via " + lbl + "\n")
+					}
+					return
+				}
+				if quiet {
+					return // suppress per-port closed/unreachable noise on big scans
+				}
+				switch oc.Verdict {
+				case scanner.QuorumRefuted:
+					if oc.Confirmations > 0 {
+						appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s), treating as closed\n", oc.Port, oc.RefutedBy, oc.Confirmations))
+					} else {
+						appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", oc.Port, oc.RefutedBy))
 					}
 				case scanner.QuorumUnconfirmed:
 					appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed), treating as closed/filtered\n", oc.Port, oc.Confirmations, oc.Quorum))

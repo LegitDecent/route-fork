@@ -194,7 +194,7 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 		}
 		need := quorum - confirmations
 		batchN := need + 2
-		var batch []*proxy.Proxy
+		var batch, throttled []*proxy.Proxy
 		for len(batch) < batchN && consumed < poolSize {
 			p := pool[(startIdx+consumed)%poolSize]
 			consumed++
@@ -202,9 +202,17 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 				continue
 			}
 			if !throttle.Ready(p.Address()) {
+				throttled = append(throttled, p)
 				continue
 			}
 			batch = append(batch, p)
+		}
+		// Burn protection is best-effort pacing, not a hard gate: if every
+		// remaining candidate was only resting (not failed), use rested ones
+		// anyway rather than report a false "unreachable" on a starved pool.
+		for len(batch) < batchN && len(throttled) > 0 {
+			batch = append(batch, throttled[0])
+			throttled = throttled[1:]
 		}
 		if len(batch) == 0 {
 			break
@@ -238,7 +246,12 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 				}
 				if err != nil {
 					if proxy.IsProxyError(p.Address(), err) {
-						markFailed(p)
+						// Only condemn the proxy if IT is dead; a working proxy
+						// returns EOF/no-reply for a down target too, and pruning
+						// on that would destroy the pool during a range scan.
+						if proxy.IsProxyDead(p.Address(), err) {
+							markFailed(p)
+						}
 						results[bi] = voteResult{vote: 0, addr: p.Address()}
 					} else {
 						results[bi] = voteResult{vote: -1, addr: p.Address()}

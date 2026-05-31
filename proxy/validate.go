@@ -301,3 +301,31 @@ func IsProxyError(proxyAddr string, err error) bool {
 	// SOCKS4 "request rejected". Report as-is, don't retry.
 	return false
 }
+
+// IsProxyDead reports whether err means the PROXY ITSELF is unusable - we could
+// not reach it, it is not a SOCKS server, or it rejected our auth - as opposed
+// to a per-target failure. A working proxy still returns a reset/EOF/no-CONNECT
+// reply when its onward connection to a DOWN or FILTERED target fails, so those
+// must not condemn the proxy: otherwise scanning a range of dead hosts prunes
+// the whole pool. Only IsProxyDead proxies should be removed; other
+// IsProxyError cases warrant a retry on the same target, keeping the proxy.
+func IsProxyDead(proxyAddr string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), "dial tcp "+proxyAddr) {
+		return true
+	}
+	sl := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"not a socks5 server",
+		"no acceptable auth",
+		"authentication failed",
+		"auth required",
+	} {
+		if strings.Contains(sl, sig) {
+			return true
+		}
+	}
+	return false
+}
