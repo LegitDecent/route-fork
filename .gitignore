@@ -12,3 +12,9 @@ rofk.exe
 .idea/
 .vscode/
 *.swp
+
+# local dev binaries
+rofk-local
+rofk
+rofk.exe
+coverage.out
