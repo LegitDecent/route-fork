@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: 'stable'
 
       # Fyne requires OpenGL + X11 headers to compile on Linux
       - name: Install build dependencies
@@ -34,7 +34,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: 'stable'
 
       # govulncheck compiles the packages (including the cgo GUI code), so it
       # needs the same Fyne build dependencies as the test job.

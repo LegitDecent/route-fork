@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: 'stable'
 
       # Fyne needs OpenGL + X11 headers on Linux. apt-get update is required on
       # the arm64 runner (its package cache isn't pre-warmed like ubuntu-latest).
