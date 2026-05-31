@@ -35,6 +35,8 @@ type PortOutcome struct {
 	Quorum        int      // quorum actually required (post-clamp)
 	OpenLabels    []string // labels of every proxy that voted open, in probe order
 	Banner        string   // first non-empty banner seen on an open vote
+	Service       string   // identified service (first open vote that learned one)
+	Version       string   // identified version/detail (may be empty)
 	RefutedBy     string   // proxy address that voted refused (set when refuted)
 }
 
@@ -158,6 +160,8 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 	refutedBy := ""
 	var openLabels []string
 	openBanner := ""
+	openService := ""
+	openVersion := ""
 	consumed := 0
 
 	for confirmations < quorum && !refuted && proxyErrors < maxProxyRetries && consumed < poolSize {
@@ -183,10 +187,12 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 		}
 
 		type voteResult struct {
-			vote   int // 1 open, -1 refused, 0 proxy-error
-			banner string
-			label  string
-			addr   string
+			vote    int // 1 open, -1 refused, 0 proxy-error
+			banner  string
+			service string
+			version string
+			label   string
+			addr    string
 		}
 		results := make([]voteResult, len(batch))
 		var bwg sync.WaitGroup
@@ -215,15 +221,9 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 					}
 					return
 				}
-				var banner string
-				_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
-				bbuf := make([]byte, 256)
-				bn, _ := conn.Read(bbuf)
-				if bn > 0 {
-					banner = CleanBanner(bbuf[:bn])
-				}
+				svc, ver, banner := IdentifyService(conn, target, port, timeout)
 				conn.Close()
-				results[bi] = voteResult{vote: 1, banner: banner, label: hooks.label(p), addr: p.Address()}
+				results[bi] = voteResult{vote: 1, banner: banner, service: svc, version: ver, label: hooks.label(p), addr: p.Address()}
 			}(bi, p)
 		}
 		bwg.Wait()
@@ -238,6 +238,12 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 				openLabels = append(openLabels, r.label)
 				if openBanner == "" {
 					openBanner = r.banner
+				}
+				if openService == "" {
+					openService = r.service
+				}
+				if openVersion == "" {
+					openVersion = r.version
 				}
 			case -1:
 				refuted = true
@@ -255,6 +261,8 @@ func scanPort(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, port, quo
 		Quorum:        quorum,
 		OpenLabels:    openLabels,
 		Banner:        openBanner,
+		Service:       openService,
+		Version:       openVersion,
 		RefutedBy:     refutedBy,
 	}
 }

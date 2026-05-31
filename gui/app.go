@@ -216,8 +216,7 @@ func (st *state) pushFindings(findings []Finding) {
 			hr.portIdx = map[string]int{}
 		}
 
-		pd := parsePortLine(f.Line)
-		key := pd.Port + "/" + pd.Proto
+		key := fmt.Sprintf("%d/%s", f.Port, f.Proto)
 
 		// All proxies that validated this finding.
 		provs := f.Proxies
@@ -230,21 +229,20 @@ func (st *state) pushFindings(findings []Finding) {
 			pe := hr.Ports[pi]
 			pe.Proxies = dedupeAppend(pe.Proxies, provs)
 			if pe.Service == "" {
-				pe.Service = pd.Service
+				pe.Service = f.Service
 			}
 			if pe.Version == "" {
-				pe.Version = pd.Version
+				pe.Version = f.Version
 			}
 			if pe.Banner == "" {
 				pe.Banner = f.Banner
 			}
 		} else {
-			portNum, _ := strconv.Atoi(pd.Port)
 			pe := &PortEntry{
-				Port:    portNum,
-				Proto:   pd.Proto,
-				Service: pd.Service,
-				Version: pd.Version,
+				Port:    f.Port,
+				Proto:   f.Proto,
+				Service: f.Service,
+				Version: f.Version,
 				Banner:  f.Banner,
 				Proxies: dedupeAppend(nil, provs),
 			}
@@ -1206,9 +1204,15 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 						appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", oc.Port, oc.RefutedBy))
 					}
 				case scanner.QuorumOpen:
-					svc := scanner.PortService(oc.Port)
+					svc := oc.Service
+					if svc == "" {
+						svc = scanner.PortService(oc.Port)
+					}
 					if svc == "" {
 						svc = "unknown"
+					}
+					if oc.Version != "" {
+						svc += " " + oc.Version
 					}
 					appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", target, oc.Port, svc, oc.Confirmations, oc.Quorum))
 					if oc.Banner != "" {
@@ -1229,7 +1233,11 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			}
 			// logFound renders an open port from the flat (CIDR / many-port) path.
 			logFound := func(f scanner.ScanFinding) {
-				appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]\n", f.Host, f.Port, f.Service))
+				svc := f.Service
+				if f.Version != "" {
+					svc += " " + f.Version
+				}
+				appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]\n", f.Host, f.Port, svc))
 				if f.Banner != "" {
 					appendLog("      │  " + f.Banner + "\n")
 				}
@@ -1243,10 +1251,13 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				for _, f := range fs {
 					out = append(out, Finding{
 						Host:     f.Host,
-						Line:     fmt.Sprintf("%d/%s   open  %s", f.Port, f.Proto, f.Service),
+						Port:     f.Port,
+						Proto:    f.Proto,
+						Service:  f.Service,
+						Version:  f.Version,
+						Banner:   f.Banner,
 						ProxyURI: f.Primary,
 						Proxies:  f.Proxies,
-						Banner:   f.Banner,
 					})
 				}
 				return out
@@ -1497,9 +1508,13 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 						appendLog("HOST: " + hr.host + "\n")
 					}
 					for _, f := range hr.findings {
-						displayLine := f.Line
+						svc := f.Service
+						if f.Version != "" {
+							svc += "  " + f.Version
+						}
+						displayLine := fmt.Sprintf("%d/%s   open  %s", f.Port, f.Proto, svc)
 						if f.Host != "" {
-							displayLine = f.Host + "  " + f.Line
+							displayLine = f.Host + "  " + displayLine
 						}
 						appendLog("  ► OPEN  " + displayLine + "\n")
 						if len(f.Proxies) > 0 {

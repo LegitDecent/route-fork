@@ -41,6 +41,22 @@ func TestRunScan_SingleHostQuorumPath(t *testing.T) {
 	}
 }
 
+func TestRunScan_CarriesServiceVersion(t *testing.T) {
+	dial, _ := mockDialer(map[string]behavior{
+		addr(0): {kind: voteOpen, banner: "SSH-2.0-OpenSSH_9.6\r\n"},
+		addr(1): {kind: voteOpen, banner: "SSH-2.0-OpenSSH_9.6\r\n"},
+	})
+	results := RunScan(context.Background(), dial, staticPool(mkPool(2)),
+		ScanRequest{Targets: []string{"host"}, Ports: []int{22}, Quorum: 2, Concurrency: 4}, ScanHooks{})
+	if countFindings(results) != 1 {
+		t.Fatalf("want 1 finding, got %d", countFindings(results))
+	}
+	f := results[0].Findings[0]
+	if f.Service != "ssh" || f.Version == "" {
+		t.Fatalf("want ssh + version, got service=%q version=%q", f.Service, f.Version)
+	}
+}
+
 func TestRunScan_RefusedPortDropped(t *testing.T) {
 	dial, _ := mockDialer(map[string]behavior{
 		addr(0): {kind: voteRefused}, addr(1): {kind: voteRefused}, addr(2): {kind: voteRefused},

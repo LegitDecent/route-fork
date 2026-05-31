@@ -5,6 +5,7 @@ import (
 	"context"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -34,13 +35,17 @@ var openPortRE = regexp.MustCompile(`(\d+)/(tcp|udp)\s+open`)
 // nmapReportRE matches "Nmap scan report for 1.2.3.4" or "Nmap scan report for hostname (1.2.3.4)"
 var nmapReportRE = regexp.MustCompile(`Nmap scan report for (\S+)`)
 
-// Finding records a single open-port result from a scan.
+// Finding records a single open-port result from a scan, in structured form so
+// the Hosts tab needs no string re-parsing.
 type Finding struct {
-	Host     string   // IP/hostname from "Nmap scan report for X" (empty if unknown)
-	Line     string   // port line: "80/tcp   open  http" or full nmap line
+	Host     string   // IP/hostname (empty if unknown)
+	Port     int      // open port
+	Proto    string   // "tcp" / "udp"
+	Service  string   // service name
+	Version  string   // version/detail (may be empty)
+	Banner   string   // service banner grabbed at connect time (may be empty)
 	ProxyURI string   // primary proxy that discovered this port
 	Proxies  []string // all proxies that agreed the port is open (quorum)
-	Banner   string   // service banner grabbed at connect time (may be empty)
 }
 
 // PortDetail holds parsed fields from a nmap/built-in port line.
@@ -87,7 +92,12 @@ func execNmapParsed(ctx context.Context, cmd []string, proxyURI string, log func
 			openPorts++
 			log("  ► OPEN  " + line + "\n")
 			log("      └─ via " + proxyURI + "\n")
-			findings = append(findings, Finding{Host: currentHost, Line: line, ProxyURI: proxyURI})
+			pd := parsePortLine(line)
+			pn, _ := strconv.Atoi(pd.Port)
+			findings = append(findings, Finding{
+				Host: currentHost, Port: pn, Proto: pd.Proto,
+				Service: pd.Service, Version: pd.Version, ProxyURI: proxyURI,
+			})
 		} else {
 			log("  " + line + "\n")
 		}

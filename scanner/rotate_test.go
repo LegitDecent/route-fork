@@ -204,6 +204,9 @@ func TestRotateScan_BannerCaptured(t *testing.T) {
 	if !strings.Contains(out[0].Banner, "SSH-2.0-OpenSSH_9.6") {
 		t.Fatalf("want SSH banner, got %q", out[0].Banner)
 	}
+	if out[0].Service != "ssh" || !strings.Contains(out[0].Version, "OpenSSH_9.6") {
+		t.Fatalf("want ssh/OpenSSH_9.6, got service=%q version=%q", out[0].Service, out[0].Version)
+	}
 }
 
 func TestRotateScan_MultiPortProgress(t *testing.T) {

@@ -3,7 +3,6 @@ package scanner
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +16,8 @@ type ScanFinding struct {
 	Host    string   // target host/IP the port was found on
 	Port    int      // open port
 	Proto   string   // "tcp"
-	Service string   // best-effort service name (from PortService)
+	Service string   // identified service (probe, falling back to port name)
+	Version string   // identified version/detail (may be empty)
 	Banner  string   // service banner grabbed at connect (may be empty)
 	Primary string   // primary proxy label that found it
 	Proxies []string // every proxy label that agreed it is open
@@ -163,7 +163,10 @@ func quorumTarget(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, targe
 		if oc.Verdict != QuorumOpen {
 			continue
 		}
-		svc := PortService(oc.Port)
+		svc := oc.Service
+		if svc == "" {
+			svc = PortService(oc.Port)
+		}
 		if svc == "" {
 			svc = "unknown"
 		}
@@ -173,7 +176,7 @@ func quorumTarget(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, targe
 		}
 		mu.Lock()
 		findings = append(findings, ScanFinding{
-			Host: target, Port: oc.Port, Proto: "tcp", Service: svc,
+			Host: target, Port: oc.Port, Proto: "tcp", Service: svc, Version: oc.Version,
 			Banner: oc.Banner, Primary: primary, Proxies: oc.OpenLabels,
 		})
 		mu.Unlock()
@@ -219,14 +222,13 @@ func flatScan(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, hosts []s
 		if err != nil {
 			return // closed/filtered/proxy-error: not an open port
 		}
-		banner := grabBanner(conn)
+		svc, ver, banner := IdentifyService(conn, host, port, req.Timeout)
 		conn.Close()
-		svc := PortService(port)
 		if svc == "" {
 			svc = "unknown"
 		}
 		label := req.label(p)
-		f := ScanFinding{Host: host, Port: port, Proto: "tcp", Service: svc,
+		f := ScanFinding{Host: host, Port: port, Proto: "tcp", Service: svc, Version: ver,
 			Banner: banner, Primary: label, Proxies: []string{label}}
 		mu.Lock()
 		findings = append(findings, f)
@@ -253,15 +255,4 @@ func flatScan(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, hosts []s
 	}
 	wg.Wait()
 	return findings
-}
-
-// grabBanner reads a short service banner (services that speak first).
-func grabBanner(conn net.Conn) string {
-	_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
-	buf := make([]byte, 256)
-	n, _ := conn.Read(buf)
-	if n > 0 {
-		return CleanBanner(buf[:n])
-	}
-	return ""
 }
