@@ -19,13 +19,13 @@ rofk \- SOCKS proxy\-aware port scanner with nmap integration
 .SH DESCRIPTION
 .B rofk
 routes port scans through SOCKS4/SOCKS5 proxy pools.
-It starts a local SOCKS4 relay so that
+By default it uses a built\-in, pure\-Go TCP scanner that sends every connection
+through a proxy (no direct\-connection fallback) and detects service versions.
+For version detection or NSE on ranges, \fB\-tool nmap\fR starts a local SOCKS
+relay so
 .BR nmap (1)
-can be used without proxychains or any other wrapper \(em just pass
-.B \-proxlist
-and
-.B \-ip
-and every other flag goes straight to nmap unchanged.
+can run without proxychains; unrecognised flags are forwarded to nmap unchanged.
+See the CIDR leak warning under OPTIONS.
 .PP
 Running without arguments opens the graphical user interface.
 .SH OPTIONS
@@ -72,7 +72,12 @@ Comma\-separated: host,port,proto,service,version,proxy.
 .RE
 .TP
 \fB\-tool\fR \fIname\fR
-Scanner backend.  \fBnmap\fR (default) or \fBbuiltin\fR (pure\-Go TCP connect).
+Scanner backend.  \fBbuiltin\fR (default; pure\-Go TCP connect, always proxied,
+with service/version detection) or \fBnmap\fR (opt\-in; see the CIDR warning).
+.TP
+\fB\-confirm\fR \fIN\fR
+Built\-in scan quorum: how many proxies must agree a port is open before it is
+reported (default: 1).
 .TP
 \fB\-conc\fR \fIN\fR
 Concurrency for the built\-in scanner (default: 200).
@@ -89,8 +94,14 @@ Wrap pool when exhausted (default: on).
 \fB\-nmap\-path\fR \fIpath\fR
 Absolute path to the nmap binary.
 Saved to \fI~/.config/rofk/config\fR for future runs.
+.SS "nmap and CIDR (leak warning)"
+With \fB\-tool nmap\fR on a CIDR, real nmap runs through a local SOCKS relay.
+nmap's \fB\-\-proxies\fR can silently fall back to a DIRECT connection if a proxy
+fails, leaking this host's IP. nmap cannot avoid this; the default \fBbuiltin\fR
+scanner is always proxied with no fallback.
 .SS "nmap pass-through"
-Every flag not listed above is forwarded to nmap unchanged.
+Every flag not listed above is forwarded to nmap unchanged (used only with
+\fB\-tool nmap\fR).
 This includes \fB\-sV\fR, \fB\-sC\fR, \fB\-A\fR, \fB\-O\fR, \fB\-T4\fR,
 \fB\-Pn\fR, \fB\-\-script\fR, \fB\-oX\fR, and all others.
 Use \fB\-\-\fR to separate ambiguous flags if needed.
@@ -120,20 +131,19 @@ Print the usage summary.
 Key\-value configuration file.  Currently stores \fBnmap_path\fR.
 .SH EXAMPLES
 .PP
-Scan common ports on a single host, detect service versions:
+Built\-in scan (default): always proxied, with service/version detection:
 .nf
-  rofk \-proxlist ~/proxies.txt \-ip 192.168.1.2 \-p 80,443 \-sV
+  rofk \-proxlist ~/proxies.txt \-ip 192.168.1.2 \-p 80,443
 .fi
 .PP
-Scan a /24 with aggressive timing, save JSON output:
+Require two proxies to agree a port is open (defeats lying proxies):
 .nf
-  rofk \-proxlist ~/proxies.txt \-ip 10.0.0.0/24 \-p 1\-1024 \-T4 \-A \\
-    \-type json \-out results.json
+  rofk \-proxlist ~/proxies.txt \-ip target.com \-p 1\-1024 \-confirm 2
 .fi
 .PP
-Run NSE scripts, forward nmap XML to a file:
+Opt into nmap for version detection / NSE on a range (see the CIDR warning):
 .nf
-  rofk \-proxlist proxies.txt \-ip target.com \-sV \-\-script=vuln \\
+  rofk \-proxlist proxies.txt \-ip 10.0.0.0/24 \-tool nmap \-sV \-\-script=vuln \\
     \-oX nmap\-out.xml
 .fi
 .PP

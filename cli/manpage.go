@@ -23,13 +23,12 @@ rofk \- SOCKS proxy\-aware port scanner with nmap integration
 .SH DESCRIPTION
 .B rofk
 routes port scans through SOCKS4/SOCKS5 proxy pools.
-It starts a local SOCKS4 relay so that
+By default it uses a built\-in pure\-Go TCP scanner that sends every connection
+through a proxy (no direct fallback) and detects service versions.
+With \fB\-tool nmap\fR it starts a local SOCKS relay so
 .BR nmap (1)
-can be used without proxychains or any other wrapper \(em just pass
-.B \-proxlist
-and
-.B \-ip
-and every other flag goes straight to nmap unchanged.
+can run without proxychains; unrecognised flags are forwarded to nmap unchanged.
+See the CIDR leak warning under OPTIONS.
 .PP
 Running without arguments opens the graphical user interface.
 .SH OPTIONS
@@ -58,7 +57,12 @@ Write results to this file (format controlled by \fB\-type\fR).
 Output format: txt (default), json, xml, csv.
 .TP
 \fB\-tool\fR \fIname\fR
-nmap (default) or builtin (pure-Go TCP connect).
+builtin (default; pure-Go TCP connect, always proxied, with service/version
+detection) or nmap (opt-in; see the CIDR warning below).
+.TP
+\fB\-confirm\fR \fIN\fR
+Built-in scan quorum: how many proxies must agree a port is open before it is
+reported (default: 1).
 .TP
 \fB\-conc\fR \fIN\fR
 Concurrency for built-in scanner (default: 200).
@@ -74,12 +78,18 @@ Wrap pool when exhausted (default: on).
 .TP
 \fB\-nmap\-path\fR \fIpath\fR
 Path to nmap binary; saved to ~/.config/rofk/config.
+.SS "nmap and CIDR (leak warning)"
+With \fB\-tool nmap\fR on a CIDR, real nmap runs through a local SOCKS relay.
+nmap's \fB\-\-proxies\fR can silently fall back to a DIRECT connection if a proxy
+fails, leaking this host's IP. nmap cannot avoid this; the default builtin
+scanner is always proxied with no fallback.
 .SS "nmap pass-through"
-Every unrecognised flag is forwarded to nmap unchanged.
+Every unrecognised flag is forwarded to nmap unchanged (used only with \fB\-tool nmap\fR).
 .SH EXAMPLES
 .nf
-  rofk \-proxlist ~/proxies.txt \-ip 192.168.1.2 \-p 80,443 \-sV
-  rofk \-proxlist ~/proxies.txt \-ip 10.0.0.0/24 \-T4 \-A \-type json \-out r.json
+  rofk \-proxlist ~/proxies.txt \-ip 192.168.1.2 \-p 80,443
+  rofk \-proxlist ~/proxies.txt \-ip target.com \-p 1\-1024 \-confirm 2
+  rofk \-proxlist ~/proxies.txt \-ip 10.0.0.0/24 \-tool nmap \-sV \-type json \-out r.json
   rofk validate \-f raw.txt \-o live.txt \-t 200
 .fi
 .SH FILES

@@ -501,6 +501,7 @@ PROXY-MANAGER FLAGS
   -out <file>          Output file path; use "-" for stdout
   -type <fmt>          Output format: txt | json | xml | csv  (default: txt)
   -tool <name>         Scanner: builtin | nmap  (default: builtin; nmap warns on CIDR)
+  -confirm <N>         Built-in quorum: proxies that must agree open  (default: 1)
   -conc <N>            Concurrency for builtin scanner  (default: 200)
   -timeout <sec>       Connect timeout  (default: 5)
   -rotate              Rotate proxy between targets  (default: on)
@@ -508,15 +509,23 @@ PROXY-MANAGER FLAGS
   -wrap                Wrap pool when exhausted  (default: on)
   -nmap-path <path>    Path to nmap binary (saved to config)
 
+THE BUILT-IN SCANNER (default) is always proxied with no fallback, and detects
+services/versions (banners, an HTTP probe, and a TLS handshake on TLS ports).
+
+NMAP (opt-in, -tool nmap) is for version detection / NSE on ranges. WARNING: on
+a CIDR, nmap runs through a SOCKS relay whose --proxies can silently fall back to
+a DIRECT connection if a proxy fails, leaking this host's IP. nmap cannot avoid
+this; rofk warns and recommends the built-in scanner.
+
 NMAP PASS-THROUGH
-  Any flag not listed above is forwarded to nmap unchanged.
+  Any flag not listed above is forwarded to nmap unchanged (used only with -tool nmap).
   Examples: -sV  -sC  -A  -O  -T4  -Pn  --script=vuln  -oX /tmp/out.xml
 
 EXAMPLES
-  rofk -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443 -sV
-  rofk -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -T4 -A
-  rofk -proxlist ~/proxies.txt -ip target.com -type json -out results.json -sV
-  rofk -proxlist ~/proxies.txt -ip target.com -- -sV --script vuln
+  rofk -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443
+  rofk -proxlist ~/proxies.txt -ip target.com -p 1-1024 -confirm 2
+  rofk -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -tool nmap -sV
+  rofk -proxlist ~/proxies.txt -ip target.com -type json -out results.json
 
 NMAP DETECTION
   nmap must be installed separately.  Install it:

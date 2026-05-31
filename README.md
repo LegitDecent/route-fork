@@ -10,7 +10,8 @@
 > **Use it only on systems you own or have explicit written permission to test. Don't be stupid.**
 
 A SOCKS4/5 proxy-aware port scanner with a GUI and a full nmap-compatible CLI.
-Routes nmap (or its own built-in TCP scanner) through rotating proxy pools, no proxychains required.
+Its built-in scanner (the default) routes every connection through rotating proxy
+pools with no proxychains; nmap is available as an opt-in for CIDR ranges.
 
 ---
 
@@ -18,12 +19,14 @@ Routes nmap (or its own built-in TCP scanner) through rotating proxy pools, no p
 
 - **GUI** — proxy validator, scanner, Zenmap-style Hosts tab with drill-down, real-time log
 - **CLI** — nmap-style flat interface; unknown flags pass straight through to nmap in nmap mode
+- **Built-in TCP scanner** (default) — pure Go, zero dependencies, always proxied
+  (no direct-connection fallback), works without nmap
 - **Scan modes** — Fast / Confirmed / Paranoid: require 1, 2, or 3 proxies to independently
   agree a port is open, defeating proxies that fake a successful connection (false positives)
-- **Service + banner detection** — common-port service names plus a live banner grab
-  (SSH version, FTP/IMAP/POP3 greetings, etc.)
-- **nmap integration** — local SOCKS4↔SOCKS5 relay so nmap works without proxychains
-- **Built-in TCP scanner** — pure Go, zero dependencies, works when nmap isn't available
+- **Service + version detection** — banner parsing (SSH/FTP/SMTP/POP3/IMAP), an active
+  HTTP probe (Server header), and a TLS handshake on TLS ports (version + certificate CN)
+- **nmap (opt-in)** — local SOCKS4↔SOCKS5 relay for nmap on CIDR ranges, with a warning
+  that nmap's `--proxies` can fall back to a direct connection (a leak nmap cannot avoid)
 - **Proxy geolocation** (offline) — each proxy is tagged with the country of its egress IP
   from an embedded database; egress IPs are never sent to a third-party geolocation service
 - **Region-block check** — probe a target from proxies in different countries to spot
@@ -93,31 +96,35 @@ rofk -proxlist <file> -ip <target> [options] [nmap-flags...]
 |------|-------------|
 | `-proxlist file` | Proxy list (one per line: `socks5://host:port`, `host:port`, etc.) |
 | `-ip host` | Target host, IP, or CIDR. Also accepted as a positional arg. |
-| `-p ports` | Port spec: `80,443` or `1-1024`. Forwarded to nmap too. |
+| `-p ports` | Port spec: `80,443` or `1-1024` |
 | `-out file` | Output file path; use `-` for stdout |
 | `-type fmt` | `txt` (default) · `json` · `xml` · `csv` |
-| `-tool name` | `nmap` (default) · `builtin` |
+| `-tool name` | `builtin` (default, always proxied) · `nmap` (opt-in; warns on CIDR) |
+| `-confirm N` | Built-in quorum: proxies that must agree a port is open (default: 1) |
+| `-conc N` | Concurrent dials, built-in only (default: 200) |
 | `-timeout sec` | Connect timeout (default: 5) |
 | `-rotate` / `-no-rotate` | Rotate proxy between targets (default: on) |
 | `-nmap-path path` | Path to nmap binary (saved to config) |
 
-**Any flag not listed above is forwarded to nmap unchanged** — `-sV`, `-A`, `-T4`, `--script`, `-oX`, etc.
+**Any flag not listed above is forwarded to nmap unchanged** (only used in `-tool nmap`) — `-sV`, `-A`, `-T4`, `--script`, `-oX`, etc.
+
+> **nmap and CIDR:** `-tool nmap` on a CIDR runs real nmap through a SOCKS relay,
+> and nmap's `--proxies` can silently fall back to a **direct** connection if a
+> proxy fails — leaking this host's IP. This is nmap's behaviour, not something
+> rofk can prevent. The default `builtin` scanner is always proxied.
 
 ### Examples
 
 ```bash
-# Service version detection
-rofk -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443 -sV
+# Built-in scan (default): always proxied, with service/version detection
+rofk -proxlist ~/proxies.txt -ip 192.168.1.2 -p 80,443
 
-# Authorized Nmap aggressive scan (-A), save JSON
-rofk -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -T4 -A \
+# Require 2 proxies to agree a port is open (defeats lying proxies)
+rofk -proxlist ~/proxies.txt -ip target.com -p 1-1024 -confirm 2
+
+# Opt into nmap for version detection / NSE on a range (see CIDR warning above)
+rofk -proxlist ~/proxies.txt -ip 10.0.0.0/24 -p 1-1024 -tool nmap -sV \
   -type json -out results.json
-
-# NSE scripts + nmap XML output
-rofk -proxlist proxies.txt -ip target.com -sV --script=vuln -oX nmap.xml
-
-# Built-in scanner (no nmap needed)
-rofk -proxlist proxies.txt -ip target.com -p 1-65535 -tool builtin
 ```
 
 ### Legacy subcommands (still work)
@@ -180,11 +187,12 @@ go test ./...
 Tests cover the SOCKS4/5 handshake and proxy-dial logic, the local relay
 (forward path, SOCKS4a hostname handling, failure behaviour), the port
 scanner (open/closed ports, per-connection proxy tracking, context
-cancellation), the rotating quorum scan orchestration and region-block
-detection (via an injected mock dialer), the quorum decision and
-burn-protection throttle, the proxy error classifier, the offline geo lookup,
-and pool management. All tests use local mock servers and need no external
-network access.
+cancellation), the full Go-native scan orchestration (`RunScan`/`RotateScan`)
+and region-block detection via an injected mock dialer, the service prober
+(banner parsing plus live HTTP/TLS probes over `net.Pipe`), the quorum decision
+and burn-protection throttle, the proxy error classifier, the offline geo
+lookup, and pool management. All tests use local mock servers and need no
+external network access; `golangci-lint` runs clean.
 
 CI also runs [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck)
 on every push and pull request, so known vulnerabilities in dependencies are

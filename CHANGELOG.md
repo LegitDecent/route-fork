@@ -6,37 +6,52 @@ All notable changes to Route Fork are documented here.
 
 ## [Unreleased]
 
-Geo-awareness and an internal refactor. Developed on a branch; subject to local
-testing before release.
+The built-in scanner becomes the default, gains service/version detection and
+offline geolocation, and the scan path is fully extracted and unified across the
+GUI and CLI. Developed on a branch; subject to local testing before release.
 
 ### Added
 - **Offline proxy geolocation** — each validated proxy is tagged with the
-  country of its egress IP using a new embedded `rofk/geo` database (IPv4 →
-  ISO 3166-1, CC BY 4.0 by the NRO via sapics/ip-location-db). The lookup is
-  fully offline: egress IPs are never sent to a third-party geolocation API.
-  Country shows in the valid-proxy list, scan "via" labels, and a country
-  coverage summary in the validation status line.
+  country of its egress IP via a new embedded `rofk/geo` database (IPv4 →
+  ISO 3166-1, CC BY 4.0 by the NRO through sapics/ip-location-db). Fully
+  offline: egress IPs are never sent to a third-party service. Shown in the
+  valid-proxy list, scan "via" labels, and a country coverage summary.
 - **Region-block checker (Hosts tab)** — a "Check geo-block" button groups the
   live pool by country and probes the selected host:port from each, reporting
-  whether the port is open everywhere, **appears geo-blocked** (open from some
-  countries but refused from others), or is inconclusive, with a per-country
+  open-everywhere / appears-geo-blocked / inconclusive with a per-country
   open/refused/error breakdown.
-- **Port sorting (Hosts tab)** — sort discovered ports by number (asc/desc),
-  service, or number of validating proxies.
+- **Service + version detection (built-in scanner)** — parses banners
+  (SSH/FTP/SMTP/POP3/IMAP), actively probes silent HTTP ports (Server header),
+  and performs a TLS handshake on TLS ports (negotiated version + certificate
+  common name).
+- **Port sorting (Hosts tab)** — by port (asc/desc), service, or proxy count.
+- **`-confirm N` (CLI)** — built-in scan quorum: how many proxies must agree a
+  port is open before it is reported (default 1).
 
 ### Changed
-- **Scan orchestration extracted** — the parallel per-port quorum scan now lives
-  in a pure, Fyne-free `scanner.RotateScan` covered by unit + race tests
-  (quorum, refuted-override, proxy-error retry/dead-proxy dedup, sub-quorum,
-  clamp, banner, progress, cancellation). The GUI only renders verdicts now.
-- **nmap path clarified** — a CIDR + Built-in scan no longer silently invokes
-  nmap; it uses the built-in Go scanner. Single-host scans (which always use the
-  Go-native rotating scanner because nmap over SOCKS falls back to direct) now
-  say so in the log.
+- **The built-in scanner is now the default** in both the GUI and the CLI; nmap
+  is opt-in. Choosing nmap warns that on a CIDR it runs through a SOCKS relay
+  whose `--proxies` can silently fall back to a direct connection and leak the
+  host's IP — which is nmap behaviour, not something rofk can prevent. The
+  built-in scanner is always proxied, with no fallback.
+- **Scan orchestration extracted and unified** — the entire Go-native scan path
+  (per-port quorum, CIDR/many-port sweep, dead-proxy pruning, target iteration)
+  now lives in pure, Fyne-free `scanner.RotateScan` / `scanner.RunScan`, driven
+  by an injected dialer. GUI and CLI share it and one `DialThroughProxyCtx`.
+  `buildScannerTab` no longer contains scan logic.
+- A CIDR + built-in scan no longer silently invoked nmap.
+
+### Fixed
+- The CIDR / many-port path spawned one goroutine per host:port up front (a
+  `/16` × many ports could allocate millions); it now streams and caps live
+  goroutines at the concurrency limit.
+- Dead-proxy pruning is collected during a scan and applied once, removing a
+  read-modify-write race in the previous per-callback pruning.
 
 ### Tests
-- New suites for `scanner.RotateScan`, `scanner.ProbeRegion` /
-  `scanner.DecideRegionBlock`, and the `geo` package (synthetic + real-data).
+- New race-tested suites for `scanner.RunScan`, `scanner.RotateScan`,
+  `scanner.ProbeRegion` / `scanner.DecideRegionBlock`, the service prober (live
+  HTTP/TLS over `net.Pipe`), and the `geo` package. `golangci-lint` clean.
 
 ---
 
