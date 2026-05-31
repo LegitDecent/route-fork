@@ -69,27 +69,33 @@ func TestRunScan_RefusedPortDropped(t *testing.T) {
 	}
 }
 
-func TestRunScan_ManyPortsUsesFlatPath(t *testing.T) {
+func TestRunScan_MorePortsThanProxies(t *testing.T) {
 	dial, _ := mockDialer(nil) // all open
-	var found int
+	var opens int
 	var mu sync.Mutex
-	hooks := ScanHooks{Found: func(ScanFinding) { mu.Lock(); found++; mu.Unlock() }}
-	// 3 ports > pool of 2 => flat path; Found hook only fires on the flat path.
+	hooks := ScanHooks{Outcome: func(oc PortOutcome) {
+		if oc.Verdict == QuorumOpen {
+			mu.Lock()
+			opens++
+			mu.Unlock()
+		}
+	}}
+	// 3 ports, pool of 2: still works via the quorum grid (quorum clamped to 2).
 	results := RunScan(context.Background(), dial, staticPool(mkPool(2)),
 		ScanRequest{Targets: []string{"host"}, Ports: []int{80, 443, 8080}, Quorum: 1, Concurrency: 4}, hooks)
 	if got := countFindings(results); got != 3 {
-		t.Fatalf("want 3 flat findings, got %d", got)
+		t.Fatalf("want 3 findings, got %d", got)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if found != 3 {
-		t.Fatalf("Found hook should fire 3 times (flat path), got %d", found)
+	if opens != 3 {
+		t.Fatalf("Outcome should report 3 opens, got %d", opens)
 	}
 }
 
-func TestRunScan_CIDRExpandsToFlatPath(t *testing.T) {
+func TestRunScan_CIDRExpandsHosts(t *testing.T) {
 	dial, _ := mockDialer(nil) // all open
-	// /30 => 2 usable hosts (.1, .2); 1 port => 2 findings via flat path.
+	// /30 => 2 usable hosts (.1, .2); 1 port, quorum 2 => 2 findings.
 	results := RunScan(context.Background(), dial, staticPool(mkPool(3)),
 		ScanRequest{Targets: []string{"192.168.1.0/30"}, Ports: []int{80}, Quorum: 2, Concurrency: 4}, ScanHooks{})
 	if got := countFindings(results); got != 2 {
@@ -101,6 +107,27 @@ func TestRunScan_CIDRExpandsToFlatPath(t *testing.T) {
 	}
 	if !hosts["192.168.1.1"] || !hosts["192.168.1.2"] {
 		t.Fatalf("expected findings on .1 and .2, got %v", hosts)
+	}
+}
+
+// TestRunScan_CIDRHonorsQuorum is the regression test for the bug where a CIDR
+// scan ignored the scan mode and reported open on a single proxy. Here quorum is
+// 3 but only two proxies ever open (the third errors), so no port may be
+// reported open on any host in the range.
+func TestRunScan_CIDRHonorsQuorum(t *testing.T) {
+	beh := map[string]behavior{addr(2): {kind: voteProxyErr}} // p0,p1 open; p2 errors
+	dial, _ := mockDialer(beh)
+	results := RunScan(context.Background(), dial, staticPool(mkPool(3)),
+		ScanRequest{Targets: []string{"192.168.1.0/30"}, Ports: []int{80}, Quorum: 3, Concurrency: 4}, ScanHooks{})
+	if got := countFindings(results); got != 0 {
+		t.Fatalf("CIDR quorum 3 with only 2 openers must report 0 open, got %d", got)
+	}
+	// And with the quorum met, both hosts report open.
+	dial2, _ := mockDialer(beh)
+	met := RunScan(context.Background(), dial2, staticPool(mkPool(3)),
+		ScanRequest{Targets: []string{"192.168.1.0/30"}, Ports: []int{80}, Quorum: 2, Concurrency: 4}, ScanHooks{})
+	if got := countFindings(met); got != 2 {
+		t.Fatalf("CIDR quorum 2 with 2 openers should report 2 open, got %d", got)
 	}
 }
 

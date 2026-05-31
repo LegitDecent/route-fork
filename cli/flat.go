@@ -433,12 +433,11 @@ func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
 					fmt.Fprintf(os.Stderr, "\r[*] %d/%d  (%.0f%%)", done, total, float64(done)/float64(total)*100)
 				}
 			},
-			Outcome: func(_ string, oc scanner.PortOutcome) {
+			Outcome: func(oc scanner.PortOutcome) {
 				if oc.Verdict == scanner.QuorumOpen {
-					printOpen(target, oc.Port, oc.Service, oc.Version, oc.Banner)
+					printOpen(oc.Host, oc.Port, oc.Service, oc.Version, oc.Banner)
 				}
 			},
-			Found: func(f scanner.ScanFinding) { printOpen(f.Host, f.Port, f.Service, f.Version, f.Banner) },
 			ProxyDead: func(p *proxy.Proxy) {
 				deadMu.Lock()
 				dead[p.Address()] = true

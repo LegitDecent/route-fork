@@ -3,9 +3,6 @@ package scanner
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"rofk/proxy"
@@ -30,15 +27,16 @@ type HostResult struct {
 }
 
 // ScanRequest configures a built-in rotate scan over one or more targets. Each
-// target is scanned across the whole pool: single hosts with few ports use the
-// quorum path (RotateScan); CIDRs and many-port specs use a flat connect sweep.
+// target is expanded (a CIDR becomes its host list) and every host:port is
+// probed across the pool with the same quorum, so the scan mode applies whether
+// the target is a single host or a range.
 type ScanRequest struct {
 	Targets     []string
 	Ports       []int
 	Quorum      int
 	Concurrency int
 	Timeout     time.Duration
-	Throttle    *ProxyThrottle            // optional burn protection (quorum path)
+	Throttle    *ProxyThrottle            // optional burn protection
 	Label       func(*proxy.Proxy) string // proxy display label; nil => p.URI()
 	Shuffle     func([]*proxy.Proxy)      // optional pool reordering per target; nil => keep order
 }
@@ -48,11 +46,10 @@ type ScanRequest struct {
 // must be safe for concurrent use. They are for live feedback only - the decided
 // results are returned from RunScan.
 type ScanHooks struct {
-	Log       func(string)                        // orchestration messages
-	Progress  func(done, total int)               // per-target port/job progress
-	Outcome   func(target string, oc PortOutcome) // per-port verdict (quorum path)
-	Found     func(ScanFinding)                   // each open port (flat path)
-	ProxyDead func(p *proxy.Proxy)                // proxy classified dead mid-scan
+	Log       func(string)          // orchestration messages
+	Progress  func(done, total int) // host:port progress within a target
+	Outcome   func(PortOutcome)     // each host:port verdict (for live logging)
+	ProxyDead func(p *proxy.Proxy)  // proxy classified dead mid-scan
 }
 
 func (h ScanHooks) log(s string) {
@@ -61,17 +58,10 @@ func (h ScanHooks) log(s string) {
 	}
 }
 
-func (r ScanRequest) label(p *proxy.Proxy) string {
-	if r.Label != nil {
-		return r.Label(p)
-	}
-	return p.URI()
-}
-
 // RunScan executes a built-in scan of every target across the pool snapshot
 // returned by getPool (re-read per target so mid-scan pruning takes effect on
-// later targets). It owns target iteration and per-target routing; the leaf
-// dialing is done through dial, making the whole path unit-testable with a mock.
+// later targets). It owns target iteration; per-host:port quorum probing is done
+// by RotateScan through the injected dialer, making the whole path unit-testable.
 func RunScan(ctx context.Context, dial DialFunc, getPool func() []*proxy.Proxy, req ScanRequest, hooks ScanHooks) []HostResult {
 	var results []HostResult
 	for _, target := range req.Targets {
@@ -90,36 +80,16 @@ func RunScan(ctx context.Context, dial DialFunc, getPool func() []*proxy.Proxy, 
 	return results
 }
 
-// scanTarget routes one target to the quorum path (single host, few ports) or
-// the flat connect sweep (CIDR or many ports).
+// scanTarget expands a target (CIDR -> host list) and probes every host:port
+// across the pool with the configured quorum. The quorum applies uniformly to
+// single hosts and ranges alike.
 func scanTarget(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, target string, req ScanRequest, hooks ScanHooks) []ScanFinding {
-	n := len(pool)
-	isCIDR := strings.Contains(target, "/")
-
-	if !isCIDR && len(req.Ports) <= n {
-		return quorumTarget(ctx, dial, pool, target, req, hooks)
-	}
-
 	hosts, err := ExpandTarget(target)
 	if err != nil {
 		hooks.log("[-] target error: " + err.Error() + "\n")
 		return nil
 	}
-	if isCIDR {
-		hooks.log(fmt.Sprintf("[*] TCP CIDR sweep  %s  %d hosts x %d ports  via %d proxies (rotating per connection)\n",
-			target, len(hosts), len(req.Ports), n))
-	} else {
-		hooks.log(fmt.Sprintf("[*] TCP sweep  %s  %d ports  via %d proxies (rotating per connection)\n",
-			target, len(req.Ports), n))
-	}
-	return flatScan(ctx, dial, pool, hosts, target, req, hooks)
-}
 
-// quorumTarget probes each port of a single host across the pool, requiring a
-// quorum of proxies to agree before reporting open. Dead proxies are reported
-// via hooks.ProxyDead so the caller can prune them.
-func quorumTarget(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, target string, req ScanRequest, hooks ScanHooks) []ScanFinding {
-	n := len(pool)
 	ordered := make([]*proxy.Proxy, len(pool))
 	copy(ordered, pool)
 	if req.Shuffle != nil {
@@ -130,19 +100,23 @@ func quorumTarget(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, targe
 	if quorum < 1 {
 		quorum = 1
 	}
-	if quorum > n {
-		quorum = n
+	if quorum > len(pool) {
+		quorum = len(pool)
 	}
-	hooks.log(fmt.Sprintf("[*] TCP rotate  %s  %d port(s) / %d proxies  1 port each  (need %d to agree open)  [parallel]\n",
-		target, len(req.Ports), n, quorum))
+
+	if len(hosts) > 1 {
+		hooks.log(fmt.Sprintf("[*] TCP scan  %s  %d hosts x %d ports / %d proxies  (need %d to agree open)\n",
+			target, len(hosts), len(req.Ports), len(pool), quorum))
+	} else {
+		hooks.log(fmt.Sprintf("[*] TCP scan  %s  %d port(s) / %d proxies  (need %d to agree open)\n",
+			target, len(req.Ports), len(pool), quorum))
+	}
 	if req.Throttle != nil {
 		hooks.log("[*] Burn protection on\n")
 	}
 
-	var mu sync.Mutex
-	var findings []ScanFinding
 	outcomes := RotateScan(ctx, dial, ordered, RotateConfig{
-		Target:          target,
+		Hosts:           hosts,
 		Ports:           req.Ports,
 		Quorum:          quorum,
 		DialConcurrency: req.Concurrency,
@@ -152,13 +126,10 @@ func quorumTarget(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, targe
 		Label:       req.Label,
 		OnProxyDead: hooks.ProxyDead,
 		OnPortDone:  hooks.Progress,
-		OnOutcome: func(oc PortOutcome) {
-			if hooks.Outcome != nil {
-				hooks.Outcome(target, oc)
-			}
-		},
+		OnOutcome:   hooks.Outcome,
 	})
 
+	var findings []ScanFinding
 	for _, oc := range outcomes {
 		if oc.Verdict != QuorumOpen {
 			continue
@@ -174,85 +145,10 @@ func quorumTarget(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, targe
 		if len(oc.OpenLabels) > 0 {
 			primary = oc.OpenLabels[0]
 		}
-		mu.Lock()
 		findings = append(findings, ScanFinding{
-			Host: target, Port: oc.Port, Proto: "tcp", Service: svc, Version: oc.Version,
+			Host: oc.Host, Port: oc.Port, Proto: "tcp", Service: svc, Version: oc.Version,
 			Banner: oc.Banner, Primary: primary, Proxies: oc.OpenLabels,
 		})
-		mu.Unlock()
 	}
-	return findings
-}
-
-// flatScan dials every host:port once through a rotating proxy and reports the
-// opens. It mirrors the historical chunk/CIDR behaviour: best-effort, quorum of
-// one, no dead-proxy pruning.
-func flatScan(ctx context.Context, dial DialFunc, pool []*proxy.Proxy, hosts []string, target string, req ScanRequest, hooks ScanHooks) []ScanFinding {
-	total := len(hosts) * len(req.Ports)
-	conc := req.Concurrency
-	if conc < 1 {
-		conc = 1
-	}
-	sem := make(chan struct{}, conc)
-	var doneN atomic.Int64
-	var idx atomic.Int64
-	var mu sync.Mutex
-	var findings []ScanFinding
-	var wg sync.WaitGroup
-
-	scanOne := func(host string, port int) {
-		defer wg.Done()
-		defer func() { <-sem }()
-		defer func() {
-			if hooks.Progress != nil {
-				hooks.Progress(int(doneN.Add(1)), total)
-			}
-		}()
-		if ctx.Err() != nil {
-			return
-		}
-		p := pool[int(idx.Add(1)-1)%len(pool)]
-		conn, err := dial(ctx, p, host, port, req.Timeout)
-		if ctx.Err() != nil {
-			if conn != nil {
-				conn.Close()
-			}
-			return
-		}
-		if err != nil {
-			return // closed/filtered/proxy-error: not an open port
-		}
-		svc, ver, banner := IdentifyService(conn, host, port, req.Timeout)
-		conn.Close()
-		if svc == "" {
-			svc = "unknown"
-		}
-		label := req.label(p)
-		f := ScanFinding{Host: host, Port: port, Proto: "tcp", Service: svc, Version: ver,
-			Banner: banner, Primary: label, Proxies: []string{label}}
-		mu.Lock()
-		findings = append(findings, f)
-		mu.Unlock()
-		if hooks.Found != nil {
-			hooks.Found(f)
-		}
-	}
-
-	// Acquire the concurrency slot BEFORE spawning, and stream host:port pairs
-	// instead of materialising the full job list. A /16 x many ports otherwise
-	// builds a multi-million-entry slice and spawns a parked goroutine for each;
-	// this keeps at most `conc` goroutines and connections alive at once.
-	for _, host := range hosts {
-		for _, port := range req.Ports {
-			if ctx.Err() != nil {
-				wg.Wait()
-				return findings
-			}
-			sem <- struct{}{}
-			wg.Add(1)
-			go scanOne(host, port)
-		}
-	}
-	wg.Wait()
 	return findings
 }

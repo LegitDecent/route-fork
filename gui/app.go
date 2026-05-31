@@ -1183,7 +1183,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			rotate := rotateCheck.Checked
 
 			// logOutcome renders a quorum verdict (findings are accumulated by RunScan).
-			logOutcome := func(target string, oc scanner.PortOutcome) {
+			logOutcome := func(oc scanner.PortOutcome) {
 				switch oc.Verdict {
 				case scanner.QuorumRefuted:
 					if oc.Confirmations > 0 {
@@ -1202,7 +1202,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 					if oc.Version != "" {
 						svc += " " + oc.Version
 					}
-					appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", target, oc.Port, svc, oc.Confirmations, oc.Quorum))
+					appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", oc.Host, oc.Port, svc, oc.Confirmations, oc.Quorum))
 					if oc.Banner != "" {
 						appendLog("      │  " + oc.Banner + "\n")
 					}
@@ -1217,20 +1217,6 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 					appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed), treating as closed/filtered\n", oc.Port, oc.Confirmations, oc.Quorum))
 				default:
 					appendLog(fmt.Sprintf("[!] Port %d: no proxy could reach it (target may be filtered)\n", oc.Port))
-				}
-			}
-			// logFound renders an open port from the flat (CIDR / many-port) path.
-			logFound := func(f scanner.ScanFinding) {
-				svc := f.Service
-				if f.Version != "" {
-					svc += " " + f.Version
-				}
-				appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]\n", f.Host, f.Port, svc))
-				if f.Banner != "" {
-					appendLog("      │  " + f.Banner + "\n")
-				}
-				if f.Primary != "" {
-					appendLog("      └─ via " + f.Primary + "\n")
 				}
 			}
 			// toGui maps scanner findings to the GUI Finding type for the Hosts tab.
@@ -1286,7 +1272,6 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							}
 						},
 						Outcome:   logOutcome,
-						Found:     logFound,
 						ProxyDead: func(pp *proxy.Proxy) { deadMu.Lock(); deadSet[pp.Address()] = true; deadMu.Unlock() },
 					})
 				scanProgressBind.Set(1.0)
