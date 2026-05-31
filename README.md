@@ -24,6 +24,10 @@ Routes nmap (or its own built-in TCP scanner) through rotating proxy pools, no p
   (SSH version, FTP/IMAP/POP3 greetings, etc.)
 - **nmap integration** — local SOCKS4↔SOCKS5 relay so nmap works without proxychains
 - **Built-in TCP scanner** — pure Go, zero dependencies, works when nmap isn't available
+- **Proxy geolocation** (offline) — each proxy is tagged with the country of its egress IP
+  from an embedded database; egress IPs are never sent to a third-party geolocation service
+- **Region-block check** — probe a target from proxies in different countries to spot
+  geo-blocking (a port open from some countries but refused from others)
 - **Self-healing pool** — dead proxies are retried-past and pruned mid-scan; optional
   auto-revalidation re-checks the pool on an interval
 - **Proxy burn protection** (opt-in) — paces reuse of each proxy so a free SOCKS pool
@@ -136,7 +140,7 @@ rofk
 
 **Proxies tab** — paste or import proxy lists, validate concurrently, export live proxies.  
 **Scanner tab** — configure target, ports (with an "add common ports" toggle), timing presets (T3/T4/T5), **Scan mode** (Fast/Confirmed/Paranoid open-port confirmation), and optional **proxy burn protection** (per-proxy reuse gap), with a real-time log.  
-**Hosts tab** — Zenmap-style three-pane drill-down: pick a host → see its deduplicated open ports → click a port to list every proxy that validated it, with service, version, and banner.  
+**Hosts tab** — Zenmap-style three-pane drill-down: pick a host → see its deduplicated open ports (sortable by port, service, or proxy count) → click a port to list every proxy that validated it, with service, version, banner, and egress country. A **Check geo-block** button probes the port from each country in your pool and reports whether it looks geo-blocked.  
 **Settings tab** — nmap path detection, validation settings, and auto-revalidation interval.
 
 ---
@@ -176,13 +180,19 @@ go test ./...
 Tests cover the SOCKS4/5 handshake and proxy-dial logic, the local relay
 (forward path, SOCKS4a hostname handling, failure behaviour), the port
 scanner (open/closed ports, per-connection proxy tracking, context
-cancellation), the quorum decision and burn-protection throttle, the proxy
-error classifier, and pool management. All tests use local mock servers and
-need no external network access.
+cancellation), the rotating quorum scan orchestration and region-block
+detection (via an injected mock dialer), the quorum decision and
+burn-protection throttle, the proxy error classifier, the offline geo lookup,
+and pool management. All tests use local mock servers and need no external
+network access.
 
 CI also runs [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck)
 on every push and pull request, so known vulnerabilities in dependencies are
 caught automatically.
+
+The bundled IP-to-country data (`geo/`) is the GeoFeed + Whois + ASN database
+from [sapics/ip-location-db](https://github.com/sapics/ip-location-db),
+licensed CC BY 4.0 by the [NRO](https://www.nro.net/). See `geo/ATTRIBUTION.md`.
 
 ---
 

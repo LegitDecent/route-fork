@@ -4,6 +4,42 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [Unreleased]
+
+Geo-awareness and an internal refactor. Developed on a branch; subject to local
+testing before release.
+
+### Added
+- **Offline proxy geolocation** — each validated proxy is tagged with the
+  country of its egress IP using a new embedded `rofk/geo` database (IPv4 →
+  ISO 3166-1, CC BY 4.0 by the NRO via sapics/ip-location-db). The lookup is
+  fully offline: egress IPs are never sent to a third-party geolocation API.
+  Country shows in the valid-proxy list, scan "via" labels, and a country
+  coverage summary in the validation status line.
+- **Region-block checker (Hosts tab)** — a "Check geo-block" button groups the
+  live pool by country and probes the selected host:port from each, reporting
+  whether the port is open everywhere, **appears geo-blocked** (open from some
+  countries but refused from others), or is inconclusive, with a per-country
+  open/refused/error breakdown.
+- **Port sorting (Hosts tab)** — sort discovered ports by number (asc/desc),
+  service, or number of validating proxies.
+
+### Changed
+- **Scan orchestration extracted** — the parallel per-port quorum scan now lives
+  in a pure, Fyne-free `scanner.RotateScan` covered by unit + race tests
+  (quorum, refuted-override, proxy-error retry/dead-proxy dedup, sub-quorum,
+  clamp, banner, progress, cancellation). The GUI only renders verdicts now.
+- **nmap path clarified** — a CIDR + Built-in scan no longer silently invokes
+  nmap; it uses the built-in Go scanner. Single-host scans (which always use the
+  Go-native rotating scanner because nmap over SOCKS falls back to direct) now
+  say so in the log.
+
+### Tests
+- New suites for `scanner.RotateScan`, `scanner.ProbeRegion` /
+  `scanner.DecideRegionBlock`, and the `geo` package (synthetic + real-data).
+
+---
+
 ## [v1.4.3] — 2026-05-31
 
 Production-readiness pass: static analysis, supply-chain integrity, fuzzing, and
