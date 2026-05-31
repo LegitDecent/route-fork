@@ -36,6 +36,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # govulncheck compiles the packages (including the cgo GUI code), so it
+      # needs the same Fyne build dependencies as the test job.
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+
       # govulncheck only flags vulnerabilities whose affected functions are
       # actually reachable from our code, so it stays low-noise.
       - name: Run govulncheck
