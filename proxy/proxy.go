@@ -26,6 +26,7 @@ type Proxy struct {
 	Status     Status
 	FailReason string
 	EgressIP   string // real outbound IP seen by targets (may differ from Host)
+	Country    string // ISO 3166-1 alpha-2 of EgressIP, set during egress fetch ("" if unknown)
 }
 
 func (p *Proxy) Address() string {
@@ -43,6 +44,9 @@ func (p *Proxy) DisplayValid() string {
 	s := fmt.Sprintf("%-24s  %-7s  %.0f ms", p.Address(), p.Proto, p.LatencyMs)
 	if p.EgressIP != "" {
 		s += "  egress:" + p.EgressIP
+		if p.Country != "" {
+			s += " [" + p.Country + "]"
+		}
 	}
 	return s
 }

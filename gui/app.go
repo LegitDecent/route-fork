@@ -782,7 +782,11 @@ func mergeCommonPorts(spec string) string {
 // proxy address so the user can see what IP the target server actually sees.
 func proxyViaLabel(p *proxy.Proxy) string {
 	if p.EgressIP != "" {
-		return p.URI() + " [exit: " + p.EgressIP + "]"
+		exit := p.EgressIP
+		if p.Country != "" {
+			exit += " " + p.Country
+		}
+		return p.URI() + " [exit: " + exit + "]"
 	}
 	return p.URI()
 }

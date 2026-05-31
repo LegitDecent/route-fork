@@ -6,6 +6,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"rofk/geo"
 )
 
 // DialThroughProxy opens a TCP tunnel to host:port through the SOCKS proxy.
@@ -83,6 +85,7 @@ func FetchEgressIP(p *Proxy, timeout time.Duration) (string, error) {
 		}
 		if ip := extractPublicIP(parts[1]); ip != "" {
 			p.EgressIP = ip
+			p.Country = geo.Lookup(ip)
 			return ip, nil
 		}
 	}
