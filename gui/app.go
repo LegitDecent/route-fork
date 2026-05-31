@@ -875,58 +875,6 @@ func dialThroughProxyCtx(ctx context.Context, p *proxy.Proxy, host string, port 
 	}
 }
 
-// guiBuiltinScan runs the built-in TCP scanner, logs open ports in real-time,
-// annotates each with proxyLabel, and returns the count and findings.
-func guiBuiltinScan(ctx context.Context, getProxy func() *proxy.Proxy, target, ports string,
-	conc int, timeout time.Duration, prog binding.Float, log func(string), proxyLabel string) (int, []Finding) {
-
-	opts := scanner.Options{
-		Ports:       ports,
-		Concurrency: conc,
-		Timeout:     timeout,
-	}
-	results := make(chan scanner.Result, 512)
-	go func() {
-		// Error is intentionally ignored here: cancellation and per-port
-		// failures are surfaced through the results channel and the log.
-		_ = scanner.Scan(ctx, getProxy, target, opts, results,
-			func(done, total int) {
-				prog.Set(float64(done) / float64(total))
-			})
-		close(results)
-	}()
-
-	var open int
-	var findings []Finding
-	for r := range results {
-		if r.Open {
-			open++
-			label := proxyLabel
-			if r.Proxy != nil {
-				label = proxyViaLabel(r.Proxy)
-			}
-			svc := scanner.PortService(r.Port)
-			if svc == "" {
-				svc = "unknown"
-			}
-			log(fmt.Sprintf("  ► OPEN  %s:%d  [%s]\n", r.Host, r.Port, svc))
-			if r.Banner != "" {
-				log("      │  " + r.Banner + "\n")
-			}
-			if label != "" {
-				log("      └─ via " + label + "\n")
-			}
-			findings = append(findings, Finding{
-				Host:     r.Host,
-				Line:     fmt.Sprintf("%d/tcp   open  %s", r.Port, svc),
-				ProxyURI: label,
-				Banner:   r.Banner,
-			})
-		}
-	}
-	return open, findings
-}
-
 // ── Scanner tab ───────────────────────────────────────────────────────────────
 
 func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
@@ -1220,11 +1168,23 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				cancel()
 			}()
 
-			// Resolve nmap binary once per scan session
+			tool := toolSelect.Selected
+			to := time.Duration(float64(time.Second) * st.timeout)
+
+			// Resolve nmap once (only used for nmap CIDR sweeps).
 			nmapBin, nmapOK := cli.FindNmap("")
-			if !nmapOK && toolSelect.Selected == "nmap" {
+			if !nmapOK && tool == "nmap" {
 				appendLog("[!] nmap not found. Check Settings tab to configure path\n")
 				appendLog("    (will still attempt: " + nmapBin + ")\n")
+			}
+
+			// Scan-mode quorum (built-in / Go-native path).
+			quorum := 1
+			switch verifySelect.Selected {
+			case "Confirmed (2 proxies)":
+				quorum = 2
+			case "Paranoid (3 proxies)":
+				quorum = 3
 			}
 
 			type hostResult struct {
@@ -1232,10 +1192,240 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				findings []Finding
 			}
 			var scanResults []hostResult
-
 			completed := 0
 			wrap := wrapCheck.Checked
 			rotate := rotateCheck.Checked
+
+			// logOutcome renders a quorum verdict (findings are accumulated by RunScan).
+			logOutcome := func(target string, oc scanner.PortOutcome) {
+				switch oc.Verdict {
+				case scanner.QuorumRefuted:
+					if oc.Confirmations > 0 {
+						appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s), treating as closed\n", oc.Port, oc.RefutedBy, oc.Confirmations))
+					} else {
+						appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", oc.Port, oc.RefutedBy))
+					}
+				case scanner.QuorumOpen:
+					svc := scanner.PortService(oc.Port)
+					if svc == "" {
+						svc = "unknown"
+					}
+					appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", target, oc.Port, svc, oc.Confirmations, oc.Quorum))
+					if oc.Banner != "" {
+						appendLog("      │  " + oc.Banner + "\n")
+					}
+					for vi, lbl := range oc.OpenLabels {
+						branch := "├─"
+						if vi == len(oc.OpenLabels)-1 {
+							branch = "└─"
+						}
+						appendLog("      " + branch + " via " + lbl + "\n")
+					}
+				case scanner.QuorumUnconfirmed:
+					appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed), treating as closed/filtered\n", oc.Port, oc.Confirmations, oc.Quorum))
+				default:
+					appendLog(fmt.Sprintf("[!] Port %d: no proxy could reach it (target may be filtered)\n", oc.Port))
+				}
+			}
+			// logFound renders an open port from the flat (CIDR / many-port) path.
+			logFound := func(f scanner.ScanFinding) {
+				appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]\n", f.Host, f.Port, f.Service))
+				if f.Banner != "" {
+					appendLog("      │  " + f.Banner + "\n")
+				}
+				if f.Primary != "" {
+					appendLog("      └─ via " + f.Primary + "\n")
+				}
+			}
+			// toGui maps scanner findings to the GUI Finding type for the Hosts tab.
+			toGui := func(fs []scanner.ScanFinding) []Finding {
+				var out []Finding
+				for _, f := range fs {
+					out = append(out, Finding{
+						Host:     f.Host,
+						Line:     fmt.Sprintf("%d/%s   open  %s", f.Port, f.Proto, f.Service),
+						ProxyURI: f.Primary,
+						Proxies:  f.Proxies,
+						Banner:   f.Banner,
+					})
+				}
+				return out
+			}
+
+			// runBuiltin runs the Go-native rotating scan for one target via the tested
+			// scanner.RunScan, then prunes proxy-side-dead proxies once (race-free).
+			runBuiltin := func(target string, ports []int) []Finding {
+				scanProgressBind.Set(0)
+				var throttle *scanner.ProxyThrottle
+				if burnCheck.Checked {
+					secs, _ := strconv.ParseFloat(strings.TrimSpace(burnIntervalEntry.Text), 64)
+					if secs <= 0 {
+						secs = 2
+					}
+					throttle = scanner.NewProxyThrottle(time.Duration(secs * float64(time.Second)))
+					appendLog(fmt.Sprintf("[*] Burn protection on, each proxy rested %.0fs between uses\n", secs))
+				}
+				var deadMu sync.Mutex
+				deadSet := map[string]bool{}
+				results := scanner.RunScan(ctx, dialThroughProxyCtx,
+					func() []*proxy.Proxy { return st.pool.Valid() },
+					scanner.ScanRequest{
+						Targets:     []string{target},
+						Ports:       ports,
+						Quorum:      quorum,
+						Concurrency: conc,
+						Timeout:     to,
+						Throttle:    throttle,
+						Label:       proxyViaLabel,
+						Shuffle:     func(ps []*proxy.Proxy) { rand.Shuffle(len(ps), func(i, j int) { ps[i], ps[j] = ps[j], ps[i] }) },
+					},
+					scanner.ScanHooks{
+						Log: appendLog,
+						Progress: func(done, total int) {
+							if total > 0 {
+								scanProgressBind.Set(float64(done) / float64(total))
+							}
+						},
+						Outcome:   logOutcome,
+						Found:     logFound,
+						ProxyDead: func(pp *proxy.Proxy) { deadMu.Lock(); deadSet[pp.Address()] = true; deadMu.Unlock() },
+					})
+				scanProgressBind.Set(1.0)
+
+				deadMu.Lock()
+				numDead := len(deadSet)
+				dead := make(map[string]bool, numDead)
+				for k := range deadSet {
+					dead[k] = true
+				}
+				deadMu.Unlock()
+				if numDead > 0 {
+					var survivors []*proxy.Proxy
+					for _, pp := range st.pool.Valid() {
+						if !dead[pp.Address()] {
+							survivors = append(survivors, pp)
+						}
+					}
+					st.pool.SetValid(survivors)
+					st.validMu.Lock()
+					st.validRows = st.validRows[:0]
+					for _, pp := range survivors {
+						st.validRows = append(st.validRows, pp.DisplayValid())
+					}
+					st.validMu.Unlock()
+					if st.refreshValidList != nil {
+						st.refreshValidList()
+					}
+					if st.refreshCounts != nil {
+						st.refreshCounts()
+					}
+					appendLog(fmt.Sprintf("[=] Pruned %d dead proxy/proxies from pool (%d remaining)\n", numDead, len(survivors)))
+				}
+
+				var fs []Finding
+				if len(results) > 0 {
+					fs = toGui(results[0].Findings)
+				}
+				if ctx.Err() == nil {
+					if len(fs) == 0 {
+						appendLog("[!] 0 open ports on " + target + ". Host may be down or all ports filtered.\n")
+					}
+					appendLog(fmt.Sprintf("[+] Total: %d open port(s) on %s\n", len(fs), target))
+				}
+				return fs
+			}
+
+			// runNmapCIDR sweeps a CIDR with real nmap via the SOCKS relay, chunking
+			// hosts across proxies. Only used for tool == nmap on CIDR targets.
+			runNmapCIDR := func(target, portSpec string) []Finding {
+				snap := st.pool.Valid()
+				n := len(snap)
+				if n == 0 {
+					appendLog("[-] No proxies in pool\n")
+					return nil
+				}
+				allIPs, cidrErr := scanner.ExpandTarget(target)
+				if cidrErr != nil {
+					appendLog(fmt.Sprintf("[-] CIDR error: %v\n", cidrErr))
+					return nil
+				}
+				rand.Shuffle(len(allIPs), func(i, j int) { allIPs[i], allIPs[j] = allIPs[j], allIPs[i] })
+				chunkSize := (len(allIPs) + n - 1) / n
+				appendLog(fmt.Sprintf("[*] nmap rotate  %s  %d hosts / %d proxies  ~%d hosts each  [parallel]\n", target, len(allIPs), n, chunkSize))
+				extras := buildNmapExtras()
+
+				var findingsMu sync.Mutex
+				var targetFindings []Finding
+				var totalOpen atomic.Int64
+				var chunkWg sync.WaitGroup
+				var chunksDone atomic.Int64
+				chunksLaunched := 0
+				for i := range snap {
+					if i*chunkSize >= len(allIPs) {
+						break
+					}
+					chunksLaunched++
+				}
+				scanProgressBind.Set(0)
+
+				for i, proxyX := range snap {
+					start := i * chunkSize
+					if start >= len(allIPs) {
+						break
+					}
+					end := start + chunkSize
+					if end > len(allIPs) {
+						end = len(allIPs)
+					}
+					ipList := strings.Join(allIPs[start:end], " ")
+					appendLog(fmt.Sprintf("[*] Chunk %d/%d  %d hosts  via %s\n", i+1, n, end-start, proxyX.URI()))
+					chunkWg.Add(1)
+					go func(idx int, proxyX *proxy.Proxy, ipList string) {
+						defer func() {
+							chunkWg.Done()
+							d := chunksDone.Add(1)
+							if chunksLaunched > 0 {
+								scanProgressBind.Set(float64(d) / float64(chunksLaunched))
+							}
+						}()
+						if ctx.Err() != nil {
+							return
+						}
+						pArg, pStop, pErr := relay.NmapProxyArg(proxyX, to, appendLog)
+						if pErr != nil {
+							appendLog(fmt.Sprintf("[-] relay chunk %d: %v\n", idx, pErr))
+							return
+						}
+						defer pStop()
+						cmd := nmapCmd(nmapBin, portSpec, extras, pArg, ipList, false)
+						appendLog("  CMD: " + strings.Join(cmd, " ") + "\n")
+						open, hostDown, chunkF := execNmapParsed(ctx, cmd, proxyX.URI(), appendLog)
+						if open == 0 {
+							if hostDown {
+								appendLog(fmt.Sprintf("[!] Chunk %d/%d: hosts seem down, retrying with -Pn\n", idx, n))
+							} else {
+								appendLog(fmt.Sprintf("[!] Chunk %d/%d: 0 open, retrying with -Pn\n", idx, n))
+							}
+							retryCmd := nmapCmd(nmapBin, portSpec, extras, pArg, ipList, true)
+							appendLog("  CMD: " + strings.Join(retryCmd, " ") + "\n")
+							retryOpen, _, retryF := execNmapParsed(ctx, retryCmd, proxyX.URI(), appendLog)
+							open = retryOpen
+							chunkF = append(chunkF, retryF...)
+						}
+						findingsMu.Lock()
+						targetFindings = append(targetFindings, chunkF...)
+						findingsMu.Unlock()
+						totalOpen.Add(int64(open))
+						appendLog(fmt.Sprintf("[+] Chunk %d/%d: %d open\n", idx, n, open))
+					}(i+1, proxyX, ipList)
+				}
+				chunkWg.Wait()
+				scanProgressBind.Set(1.0)
+				if ctx.Err() == nil {
+					appendLog(fmt.Sprintf("[+] Total: %d open port(s) on %s\n", int(totalOpen.Load()), target))
+				}
+				return targetFindings
+			}
 
 			for _, target := range targets {
 				select {
@@ -1251,336 +1441,30 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 					return
 				}
 				activeProxyBind.Set(px.Address())
-
-				to := time.Duration(float64(time.Second) * st.timeout)
 				portSpec := portsEntry.Text
 
 				var targetFindings []Finding
-				tool := toolSelect.Selected
-				switch tool {
+				isCIDR := strings.Contains(target, "/")
 
-				case "Built-in (TCP connect)", "nmap":
-					// Proxy-pool TCP scan governed by Scan mode (Fast/Confirmed/
-					// Paranoid = 1/2/3 proxies must agree a port is open). Applies
-					// regardless of any rotation checkbox - Scan mode is the authority.
-					snap := st.pool.Valid()
-					n := len(snap)
-					if n == 0 {
-						appendLog("[-] No proxies in pool\n")
-						continue
+				switch {
+				case tool == "custom":
+					runExternalTool(ctx, w, st, px, target, portSpec, extraEntry.Text, customEntry.Text, tool, appendLog)
+
+				case tool == "nmap" && isCIDR:
+					targetFindings = runNmapCIDR(target, portSpec)
+
+				default:
+					// Built-in, or nmap on a single host: the Go-native rotating scanner
+					// (nmap over SOCKS falls back to direct, so single hosts never use it).
+					if tool == "nmap" {
+						appendLog("[*] Note: single-host scans use the Go-native rotating scanner; nmap runs only for CIDR sweeps (nmap over SOCKS falls back to direct connections and can't be trusted per port).\n")
 					}
-					{
-						var totalOpenAtomic atomic.Int64
-						var findingsMu sync.Mutex
-						var chunkWg sync.WaitGroup
-						var chunksDone atomic.Int64
-						var chunksLaunched int // set before goroutines start
-						scanProgressBind.Set(0)
-
-						runChunk := func(idx int, proxyX *proxy.Proxy, chunkTarget, chunkPorts string) {
-							defer func() {
-								chunkWg.Done()
-								done := chunksDone.Add(1)
-								if chunksLaunched > 0 {
-									scanProgressBind.Set(float64(done) / float64(chunksLaunched))
-								}
-							}()
-							if ctx.Err() != nil {
-								return
-							}
-							extras := buildNmapExtras()
-							pArg, pStop, pErr := relay.NmapProxyArg(proxyX, to, appendLog)
-							if pErr != nil {
-								appendLog(fmt.Sprintf("[-] relay chunk %d: %v\n", idx, pErr))
-								return
-							}
-							defer pStop()
-
-							cmd := nmapCmd(nmapBin, chunkPorts, extras, pArg, chunkTarget, false)
-							appendLog("  CMD: " + strings.Join(cmd, " ") + "\n")
-							open, hostDown, chunkF := execNmapParsed(ctx, cmd, proxyX.URI(), appendLog)
-							if open == 0 {
-								if hostDown {
-									appendLog(fmt.Sprintf("[!] Chunk %d/%d: hosts seem down, retrying with -Pn\n", idx, n))
-								} else {
-									appendLog(fmt.Sprintf("[!] Chunk %d/%d: 0 open, retrying with -Pn\n", idx, n))
-								}
-								retryCmd := nmapCmd(nmapBin, chunkPorts, extras, pArg, chunkTarget, true)
-								appendLog("  CMD: " + strings.Join(retryCmd, " ") + "\n")
-								retryOpen, _, retryF := execNmapParsed(ctx, retryCmd, proxyX.URI(), appendLog)
-								open = retryOpen
-								chunkF = append(chunkF, retryF...)
-							}
-							findingsMu.Lock()
-							targetFindings = append(targetFindings, chunkF...)
-							findingsMu.Unlock()
-							totalOpenAtomic.Add(int64(open))
-							appendLog(fmt.Sprintf("[+] Chunk %d/%d: %d open\n", idx, n, open))
-						}
-
-						// failedSet tracks proxies that failed (proxy-side) during this
-						// scan so we can retry with others and prune them afterwards.
-						var failedMu sync.Mutex
-						failedSet := make(map[string]bool)
-						markFailed := func(px *proxy.Proxy) {
-							failedMu.Lock()
-							failedSet[px.Address()] = true
-							failedMu.Unlock()
-						}
-
-						isCIDR := strings.Contains(target, "/")
-						if isCIDR {
-							if tool == "nmap" {
-								allIPs, cidrErr := scanner.ExpandTarget(target)
-								if cidrErr != nil {
-									appendLog(fmt.Sprintf("[-] CIDR error: %v\n", cidrErr))
-									break
-								}
-								rand.Shuffle(len(allIPs), func(i, j int) { allIPs[i], allIPs[j] = allIPs[j], allIPs[i] })
-								chunkSize := (len(allIPs) + n - 1) / n
-								appendLog(fmt.Sprintf("[*] nmap rotate  %s  %d hosts / %d proxies  ~%d hosts each  [parallel]\n",
-									target, len(allIPs), n, chunkSize))
-								for i := range snap {
-									if i*chunkSize >= len(allIPs) {
-										break
-									}
-									chunksLaunched++
-								}
-
-								for i, proxyX := range snap {
-									start := i * chunkSize
-									if start >= len(allIPs) {
-										break
-									}
-									end := start + chunkSize
-									if end > len(allIPs) {
-										end = len(allIPs)
-									}
-									ipList := strings.Join(allIPs[start:end], " ")
-									appendLog(fmt.Sprintf("[*] Chunk %d/%d  %d hosts  via %s\n", i+1, n, end-start, proxyX.URI()))
-									chunkWg.Add(1)
-									go runChunk(i+1, proxyX, ipList, portSpec)
-								}
-							} else {
-								// Built-in Go scanner expands the CIDR itself and rotates a proxy per
-								// connection - no nmap, no relay. (Previously a CIDR + Built-in scan
-								// silently fell through to nmap, which was the confusing part.)
-								appendLog(fmt.Sprintf("[*] TCP CIDR sweep  %s  via %d proxies (rotating per connection)\n", target, n))
-								var rr atomic.Int64
-								getP := func() *proxy.Proxy { return snap[int(rr.Add(1)-1)%n] }
-								open, cidrF := guiBuiltinScan(ctx, getP, target, portSpec, conc, to, scanProgressBind, appendLog, "")
-								totalOpenAtomic.Add(int64(open))
-								findingsMu.Lock()
-								targetFindings = append(targetFindings, cidrF...)
-								findingsMu.Unlock()
-							}
-						} else {
-							if tool == "nmap" {
-								appendLog("[*] Note: single-host scans use the Go-native rotating scanner; nmap runs only for CIDR sweeps (nmap over SOCKS falls back to direct connections and can't be trusted per port).\n")
-							}
-							ports, parseErr := scanner.ParsePorts(portSpec)
-							if parseErr != nil || len(ports) == 0 {
-								appendLog(fmt.Sprintf("[-] Port spec error: %v\n", parseErr))
-								break
-							}
-							// Both rotation paths use Go-native SOCKS5/SOCKS4 dial,
-							// not nmap --proxies, which silently falls back to direct
-							// on macOS when the proxy rejects or times out.
-							if len(ports) <= n {
-								// More proxies than ports: probe each port across the pool until a
-								// quorum of proxies independently agree it is open. The orchestration
-								// lives in scanner.RotateScan (unit-tested); here we only render verdicts.
-								shuffled := make([]*proxy.Proxy, len(snap))
-								copy(shuffled, snap)
-								rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
-
-								quorum := 1
-								switch verifySelect.Selected {
-								case "Confirmed (2 proxies)":
-									quorum = 2
-								case "Paranoid (3 proxies)":
-									quorum = 3
-								}
-								if quorum > n {
-									quorum = n
-								}
-								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d port(s) / %d proxies  1 port each  (need %d to agree open)  [parallel]\n",
-									target, len(ports), n, quorum))
-
-								var throttle *scanner.ProxyThrottle
-								if burnCheck.Checked {
-									secs, _ := strconv.ParseFloat(strings.TrimSpace(burnIntervalEntry.Text), 64)
-									if secs <= 0 {
-										secs = 2
-									}
-									throttle = scanner.NewProxyThrottle(time.Duration(secs * float64(time.Second)))
-									appendLog(fmt.Sprintf("[*] Burn protection on, each proxy rested %.0fs between uses\n", secs))
-								}
-
-								renderOutcome := func(oc scanner.PortOutcome) {
-									switch oc.Verdict {
-									case scanner.QuorumRefuted:
-										if oc.Confirmations > 0 {
-											appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s), treating as closed\n", oc.Port, oc.RefutedBy, oc.Confirmations))
-										} else {
-											appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", oc.Port, oc.RefutedBy))
-										}
-									case scanner.QuorumOpen:
-										svc := scanner.PortService(oc.Port)
-										if svc == "" {
-											svc = "unknown"
-										}
-										portLine := fmt.Sprintf("%d/tcp   open  %s", oc.Port, svc)
-										totalOpenAtomic.Add(1)
-										appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", target, oc.Port, svc, oc.Confirmations, oc.Quorum))
-										if oc.Banner != "" {
-											appendLog("      │  " + oc.Banner + "\n")
-										}
-										for vi, lbl := range oc.OpenLabels {
-											branch := "├─"
-											if vi == len(oc.OpenLabels)-1 {
-												branch = "└─"
-											}
-											appendLog("      " + branch + " via " + lbl + "\n")
-										}
-										primary := ""
-										if len(oc.OpenLabels) > 0 {
-											primary = oc.OpenLabels[0]
-										}
-										findingsMu.Lock()
-										targetFindings = append(targetFindings, Finding{Host: target, Line: portLine, ProxyURI: primary, Proxies: oc.OpenLabels, Banner: oc.Banner})
-										findingsMu.Unlock()
-									case scanner.QuorumUnconfirmed:
-										appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed), treating as closed/filtered\n", oc.Port, oc.Confirmations, oc.Quorum))
-									default: // scanner.QuorumUnreachable
-										appendLog(fmt.Sprintf("[!] Port %d: no proxy could reach it (target may be filtered)\n", oc.Port))
-									}
-								}
-
-								scanner.RotateScan(ctx,
-									func(c context.Context, p *proxy.Proxy, host string, port int, tmo time.Duration) (net.Conn, error) {
-										return dialThroughProxyCtx(c, p, host, port, tmo)
-									},
-									shuffled,
-									scanner.RotateConfig{
-										Target:          target,
-										Ports:           ports,
-										Quorum:          quorum,
-										DialConcurrency: conc,
-										Timeout:         to,
-										Throttle:        throttle,
-									},
-									scanner.RotateHooks{
-										Label:       proxyViaLabel,
-										OnProxyDead: markFailed,
-										OnPortDone: func(done, total int) {
-											if total > 0 {
-												scanProgressBind.Set(float64(done) / float64(total))
-											}
-										},
-										OnOutcome: renderOutcome,
-									},
-								)
-
-							} else {
-								// More ports than proxies: chunk ports across proxies.
-								chunkSize := (len(ports) + n - 1) / n
-								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d ports / %d proxies  ~%d ports each  [parallel]\n",
-									target, len(ports), n, chunkSize))
-								for i := range snap {
-									if i*chunkSize >= len(ports) {
-										break
-									}
-									chunksLaunched++
-								}
-								for i, proxyX := range snap {
-									start := i * chunkSize
-									if start >= len(ports) {
-										break
-									}
-									end := start + chunkSize
-									if end > len(ports) {
-										end = len(ports)
-									}
-									chunk := scanner.CompressPorts(ports[start:end])
-									pxCopy := proxyX
-									chunkLabel := proxyViaLabel(pxCopy)
-									appendLog(fmt.Sprintf("[*] Chunk %d/%d  ports:%s  via %s\n", i+1, n, chunk, chunkLabel))
-									chunkWg.Add(1)
-									go func(pxCopy *proxy.Proxy, chunk, chunkLabel string, idx int) {
-										defer chunkWg.Done()
-										defer func() {
-											done := chunksDone.Add(1)
-											if chunksLaunched > 0 {
-												scanProgressBind.Set(float64(done) / float64(chunksLaunched))
-											}
-										}()
-										if ctx.Err() != nil {
-											return
-										}
-										getP := func() *proxy.Proxy { return pxCopy }
-										open, chunkF := guiBuiltinScan(ctx, getP, target, chunk, 50, to,
-											binding.NewFloat(), appendLog, chunkLabel)
-										totalOpenAtomic.Add(int64(open))
-										findingsMu.Lock()
-										targetFindings = append(targetFindings, chunkF...)
-										findingsMu.Unlock()
-										appendLog(fmt.Sprintf("[+] Chunk %d/%d: %d open\n", idx, n, open))
-									}(pxCopy, chunk, chunkLabel, i+1)
-								}
-							}
-						}
-
-						chunkWg.Wait()
-						scanProgressBind.Set(1.0)
-
-						// Prune proxies that failed (proxy-side) during this scan.
-						failedMu.Lock()
-						numDead := len(failedSet)
-						deadCopy := make(map[string]bool, numDead)
-						for k, v := range failedSet {
-							deadCopy[k] = v
-						}
-						failedMu.Unlock()
-						if numDead > 0 {
-							valid := st.pool.Valid()
-							var survivors []*proxy.Proxy
-							for _, p := range valid {
-								if !deadCopy[p.Address()] {
-									survivors = append(survivors, p)
-								}
-							}
-							st.pool.SetValid(survivors)
-							st.validMu.Lock()
-							st.validRows = st.validRows[:0]
-							for _, p := range survivors {
-								st.validRows = append(st.validRows, p.DisplayValid())
-							}
-							st.validMu.Unlock()
-							if st.refreshValidList != nil {
-								st.refreshValidList()
-							}
-							if st.refreshCounts != nil {
-								st.refreshCounts()
-							}
-							appendLog(fmt.Sprintf("[=] Pruned %d dead proxy/proxies from pool (%d remaining)\n",
-								numDead, len(survivors)))
-						}
-
-						if ctx.Err() == nil {
-							total := int(totalOpenAtomic.Load())
-							if total == 0 {
-								appendLog("[!] Still 0 open ports. Hosts may be down or all ports filtered.\n")
-							}
-							appendLog(fmt.Sprintf("[+] Total: %d open port(s) on %s\n", total, target))
-						}
-
+					ports, parseErr := scanner.ParsePorts(portSpec)
+					if parseErr != nil || len(ports) == 0 {
+						appendLog(fmt.Sprintf("[-] Port spec error: %v\n", parseErr))
+						break
 					}
-
-				default: // custom
-					runExternalTool(ctx, w, st, px, target,
-						portSpec, extraEntry.Text,
-						customEntry.Text, tool, appendLog)
+					targetFindings = runBuiltin(target, ports)
 				}
 
 				st.pushFindings(targetFindings)
