@@ -497,7 +497,7 @@ USAGE
 PROXY-MANAGER FLAGS
   -proxlist <file>     Proxy list file (socks4/5://host:port, one per line)
   -ip <host>           Target host, IP, or CIDR  (also accepted as positional)
-  -p <ports>           Port spec: "80,443"  "1-1024"  (forwarded to nmap too)
+  -p <ports>           Port spec: "80,443"  "1-1024"  (scanner; forwarded to nmap with -tool nmap)
   -out <file>          Output file path; use "-" for stdout
   -type <fmt>          Output format: txt | json | xml | csv  (default: txt)
   -tool <name>         Scanner: builtin | nmap  (default: builtin; nmap warns on CIDR)

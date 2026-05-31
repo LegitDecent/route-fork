@@ -50,12 +50,12 @@ func TestParsePortsMixed(t *testing.T) {
 
 func TestParsePortsInvalid(t *testing.T) {
 	cases := []string{
-		"0",       // port zero
-		"65536",   // too high
-		"abc",     // not a number
-		"80-70",   // reversed range
-		"80-99999",// range end too high
-		"-1",      // negative
+		"0",        // port zero
+		"65536",    // too high
+		"abc",      // not a number
+		"80-70",    // reversed range
+		"80-99999", // range end too high
+		"-1",       // negative
 	}
 	for _, tc := range cases {
 		_, err := ParsePorts(tc)
