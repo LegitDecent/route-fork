@@ -31,15 +31,17 @@ Routes nmap (or its own built-in TCP scanner) through rotating proxy pools, no p
 
 Download the binary for your platform from the [Releases](../../releases) page.
 
-### macOS (M1/M2/M3 + Intel via Rosetta 2)
+### macOS
+Apple Silicon (M1/M2/M3) → `rofk-macos-arm64`; Intel → `rofk-macos-amd64`.
 ```bash
-chmod +x rofk-macos-arm64
+chmod +x rofk-macos-arm64        # rofk-macos-amd64 on Intel
 sudo mv rofk-macos-arm64 /usr/local/bin/rofk
 ```
 
 ### Linux
+x86_64 → `rofk-linux-amd64`; arm64 → `rofk-linux-arm64`.
 ```bash
-chmod +x rofk-linux-amd64
+chmod +x rofk-linux-amd64        # rofk-linux-arm64 on ARM
 sudo mv rofk-linux-amd64 /usr/local/bin/rofk
 ```
 
@@ -179,3 +181,10 @@ external network required.
 This tool is for **authorised security testing only**.  
 Scanning systems without explicit permission is illegal in most jurisdictions.  
 You are responsible for your own use. The authors are not responsible for misuse.
+
+---
+
+## License
+
+[Apache License 2.0](LICENSE). Provided "as is", without warranty of any kind;
+see the Disclaimer of Warranty and Limitation of Liability sections of the license.

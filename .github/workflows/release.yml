@@ -21,12 +21,26 @@ jobs:
             goarch: amd64
             suffix: linux-amd64
 
-          # macos-latest is Apple Silicon (arm64).
-          # Intel Mac users can run this transparently via Rosetta 2.
+          # Native arm64 Linux runner (GitHub-hosted).
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+
+          # macos-latest is Apple Silicon (arm64) — native build.
           - os: macos-latest
             goos: darwin
             goarch: arm64
             suffix: macos-arm64
+
+          # Intel macOS build, cross-compiled on the arm64 runner (clang is a
+          # universal cross-compiler; macOS frameworks are universal). Required
+          # for Intel Macs — they cannot run the arm64 binary (Rosetta 2 only
+          # translates x86_64 → arm64, never the other direction).
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            suffix: macos-amd64
 
           - os: windows-latest
             goos: windows
@@ -88,16 +102,18 @@ jobs:
 
             Download the binary for your platform from the **Assets** section below.
 
-            ### macOS (Apple Silicon + Intel via Rosetta 2)
+            ### macOS
+            Apple Silicon (M1/M2/M3) → `rofk-macos-arm64`.
+            Intel → `rofk-macos-amd64`.
             ```bash
-            chmod +x rofk-macos-arm64
+            chmod +x rofk-macos-arm64        # or rofk-macos-amd64 on Intel
             sudo mv rofk-macos-arm64 /usr/local/bin/rofk
             ```
-            Works natively on M1/M2/M3. Intel Macs run it automatically via Rosetta 2.
 
-            ### Linux (x86_64)
+            ### Linux
+            x86_64 → `rofk-linux-amd64`.   arm64 (e.g. Raspberry Pi, ARM servers) → `rofk-linux-arm64`.
             ```bash
-            chmod +x rofk-linux-amd64
+            chmod +x rofk-linux-amd64        # or rofk-linux-arm64 on ARM
             sudo mv rofk-linux-amd64 /usr/local/bin/rofk
             ```
 

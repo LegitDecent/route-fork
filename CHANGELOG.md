@@ -37,10 +37,16 @@ All notable changes to Route Fork are documented here.
   piping (e.g. `… -out - -type json | jq`).
 - **Skip-validation confirmation** — "Add to Pool (skip validation)" warns about
   the risks (dead proxies, possible IP leakage, no egress data) before adding.
+- **Apache License 2.0** — the project now ships under Apache-2.0 (explicit patent
+  grant plus warranty/liability disclaimers); see `LICENSE`.
 
 ### Changed
 - **`-Pn` is now the default for nmap** in every path (CLI scan, flat CLI, GUI),
   since host discovery does not work through SOCKS proxies.
+- **Release builds cover five platforms** — `linux/amd64`, `linux/arm64`, macOS
+  Apple Silicon (`macos-arm64`) and Intel (`macos-amd64`), and `windows/amd64`.
+  Intel Macs now have a native binary (an arm64-only build can't run on them —
+  Rosetta 2 only translates x86_64 → arm64).
 - **Hosts tab deduplicates ports across rescans** — re-scanning a port no longer
   adds a duplicate row; newly-validating proxies are merged into the existing port
   entry, and the per-host count reflects distinct ports.
