@@ -1284,45 +1284,57 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							failedSet[px.Address()] = true
 							failedMu.Unlock()
 						}
-						isFailed := func(px *proxy.Proxy) bool {
-							failedMu.Lock()
-							defer failedMu.Unlock()
-							return failedSet[px.Address()]
-						}
 
 						isCIDR := strings.Contains(target, "/")
 						if isCIDR {
-							allIPs, cidrErr := scanner.ExpandTarget(target)
-							if cidrErr != nil {
-								appendLog(fmt.Sprintf("[-] CIDR error: %v\n", cidrErr))
-								break
-							}
-							rand.Shuffle(len(allIPs), func(i, j int) { allIPs[i], allIPs[j] = allIPs[j], allIPs[i] })
-							chunkSize := (len(allIPs) + n - 1) / n
-							appendLog(fmt.Sprintf("[*] nmap rotate  %s  %d hosts / %d proxies  ~%d hosts each  [parallel]\n",
-								target, len(allIPs), n, chunkSize))
-							for i := range snap {
-								if i*chunkSize >= len(allIPs) {
+							if tool == "nmap" {
+								allIPs, cidrErr := scanner.ExpandTarget(target)
+								if cidrErr != nil {
+									appendLog(fmt.Sprintf("[-] CIDR error: %v\n", cidrErr))
 									break
 								}
-								chunksLaunched++
-							}
+								rand.Shuffle(len(allIPs), func(i, j int) { allIPs[i], allIPs[j] = allIPs[j], allIPs[i] })
+								chunkSize := (len(allIPs) + n - 1) / n
+								appendLog(fmt.Sprintf("[*] nmap rotate  %s  %d hosts / %d proxies  ~%d hosts each  [parallel]\n",
+									target, len(allIPs), n, chunkSize))
+								for i := range snap {
+									if i*chunkSize >= len(allIPs) {
+										break
+									}
+									chunksLaunched++
+								}
 
-							for i, proxyX := range snap {
-								start := i * chunkSize
-								if start >= len(allIPs) {
-									break
+								for i, proxyX := range snap {
+									start := i * chunkSize
+									if start >= len(allIPs) {
+										break
+									}
+									end := start + chunkSize
+									if end > len(allIPs) {
+										end = len(allIPs)
+									}
+									ipList := strings.Join(allIPs[start:end], " ")
+									appendLog(fmt.Sprintf("[*] Chunk %d/%d  %d hosts  via %s\n", i+1, n, end-start, proxyX.URI()))
+									chunkWg.Add(1)
+									go runChunk(i+1, proxyX, ipList, portSpec)
 								}
-								end := start + chunkSize
-								if end > len(allIPs) {
-									end = len(allIPs)
-								}
-								ipList := strings.Join(allIPs[start:end], " ")
-								appendLog(fmt.Sprintf("[*] Chunk %d/%d  %d hosts  via %s\n", i+1, n, end-start, proxyX.URI()))
-								chunkWg.Add(1)
-								go runChunk(i+1, proxyX, ipList, portSpec)
+							} else {
+								// Built-in Go scanner expands the CIDR itself and rotates a proxy per
+								// connection - no nmap, no relay. (Previously a CIDR + Built-in scan
+								// silently fell through to nmap, which was the confusing part.)
+								appendLog(fmt.Sprintf("[*] TCP CIDR sweep  %s  via %d proxies (rotating per connection)\n", target, n))
+								var rr atomic.Int64
+								getP := func() *proxy.Proxy { return snap[int(rr.Add(1)-1)%n] }
+								open, cidrF := guiBuiltinScan(ctx, getP, target, portSpec, conc, to, scanProgressBind, appendLog, "")
+								totalOpenAtomic.Add(int64(open))
+								findingsMu.Lock()
+								targetFindings = append(targetFindings, cidrF...)
+								findingsMu.Unlock()
 							}
 						} else {
+							if tool == "nmap" {
+								appendLog("[*] Note: single-host scans use the Go-native rotating scanner; nmap runs only for CIDR sweeps (nmap over SOCKS falls back to direct connections and can't be trusted per port).\n")
+							}
 							ports, parseErr := scanner.ParsePorts(portSpec)
 							if parseErr != nil || len(ports) == 0 {
 								appendLog(fmt.Sprintf("[-] Port spec error: %v\n", parseErr))
@@ -1332,15 +1344,13 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							// not nmap --proxies, which silently falls back to direct
 							// on macOS when the proxy rejects or times out.
 							if len(ports) <= n {
-								// More proxies than ports: one goroutine per port, each
-								// trying proxies in shuffled order until enough agree.
+								// More proxies than ports: probe each port across the pool until a
+								// quorum of proxies independently agree it is open. The orchestration
+								// lives in scanner.RotateScan (unit-tested); here we only render verdicts.
 								shuffled := make([]*proxy.Proxy, len(snap))
 								copy(shuffled, snap)
 								rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
-								chunksLaunched = len(ports)
 
-								// Quorum: how many proxies must independently agree a port
-								// is open before we report it (guards against lying proxies).
 								quorum := 1
 								switch verifySelect.Selected {
 								case "Confirmed (2 proxies)":
@@ -1354,8 +1364,6 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d port(s) / %d proxies  1 port each  (need %d to agree open)  [parallel]\n",
 									target, len(ports), n, quorum))
 
-								// Optional proxy burn protection: skip any proxy used
-								// within the configured gap so the pool isn't hammered.
 								var throttle *scanner.ProxyThrottle
 								if burnCheck.Checked {
 									secs, _ := strconv.ParseFloat(strings.TrimSpace(burnIntervalEntry.Text), 64)
@@ -1366,171 +1374,71 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 									appendLog(fmt.Sprintf("[*] Burn protection on, each proxy rested %.0fs between uses\n", secs))
 								}
 
-								// Shared dial-concurrency cap across all ports and their
-								// parallel confirmation batches.
-								dialSem := make(chan struct{}, conc)
-
-								for i, port := range ports {
-									startIdx := i % len(shuffled)
-									chunkWg.Add(1)
-									go func(startIdx, port int) {
-										defer chunkWg.Done()
-										defer func() {
-											done := chunksDone.Add(1)
-											if chunksLaunched > 0 {
-												scanProgressBind.Set(float64(done) / float64(chunksLaunched))
-											}
-										}()
-										poolSize := len(shuffled)
-										// Cap proxy-error retries so a flaky/filtered target
-										// can't churn the entire pool.
-										maxProxyRetries := 10
-										if poolSize < maxProxyRetries {
-											maxProxyRetries = poolSize
+								renderOutcome := func(oc scanner.PortOutcome) {
+									switch oc.Verdict {
+									case scanner.QuorumRefuted:
+										if oc.Confirmations > 0 {
+											appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s), treating as closed\n", oc.Port, oc.RefutedBy, oc.Confirmations))
+										} else {
+											appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", oc.Port, oc.RefutedBy))
 										}
-
-										confirmations := 0 // distinct proxies that voted open
-										proxyErrors := 0
-										refuted := false
-										var refutedBy string
-										var openLabels []string // every proxy that voted open
-										var openBanner string
-										consumed := 0 // proxies tried
-
-										// Probe proxies in PARALLEL batches: each round fires
-										// (still-needed + 2) dials at once, so quorum is reached
-										// in ~one round-trip instead of N sequential ones.
-										for confirmations < quorum && !refuted &&
-											proxyErrors < maxProxyRetries && consumed < poolSize {
-											if ctx.Err() != nil {
-												return
-											}
-											need := quorum - confirmations
-											batchN := need + 2
-											var batch []*proxy.Proxy
-											for len(batch) < batchN && consumed < poolSize {
-												p := shuffled[(startIdx+consumed)%poolSize]
-												consumed++
-												if isFailed(p) {
-													continue
-												}
-												// Burn protection: skip a proxy used too recently.
-												if !throttle.Ready(p.Address()) {
-													continue
-												}
-												batch = append(batch, p)
-											}
-											if len(batch) == 0 {
-												break
-											}
-
-											type voteResult struct {
-												vote   int // 1 open, -1 refused, 0 proxy-error
-												banner string
-												label  string
-												addr   string
-											}
-											results := make([]voteResult, len(batch))
-											var bwg sync.WaitGroup
-											for bi, p := range batch {
-												bwg.Add(1)
-												go func(bi int, p *proxy.Proxy) {
-													defer bwg.Done()
-													dialSem <- struct{}{}
-													defer func() { <-dialSem }()
-													if ctx.Err() != nil {
-														return
-													}
-													conn, err := dialThroughProxyCtx(ctx, p, target, port, to)
-													if ctx.Err() != nil {
-														if conn != nil {
-															conn.Close()
-														}
-														return
-													}
-													if err != nil {
-														if proxy.IsProxyError(p.Address(), err) {
-															markFailed(p)
-															results[bi] = voteResult{vote: 0, addr: p.Address()}
-														} else {
-															results[bi] = voteResult{vote: -1, addr: p.Address()}
-														}
-														return
-													}
-													var banner string
-													conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
-													bbuf := make([]byte, 256)
-													bn, _ := conn.Read(bbuf)
-													if bn > 0 {
-														banner = scanner.CleanBanner(bbuf[:bn])
-													}
-													conn.Close()
-													results[bi] = voteResult{vote: 1, banner: banner, label: proxyViaLabel(p), addr: p.Address()}
-												}(bi, p)
-											}
-											bwg.Wait()
-											if ctx.Err() != nil {
-												return
-											}
-
-											for _, r := range results {
-												switch r.vote {
-												case 1:
-													confirmations++
-													openLabels = append(openLabels, r.label)
-													if openBanner == "" {
-														openBanner = r.banner
-													}
-												case -1:
-													refuted = true
-													refutedBy = r.addr
-												case 0:
-													proxyErrors++
-												}
-											}
+									case scanner.QuorumOpen:
+										svc := scanner.PortService(oc.Port)
+										if svc == "" {
+											svc = "unknown"
 										}
-
-										// Decide (pure verdict logic lives in scanner.DecideQuorum,
-										// which is unit-tested; here we just render each outcome).
-										switch scanner.DecideQuorum(confirmations, quorum, refuted) {
-										case scanner.QuorumRefuted:
-											if confirmations > 0 {
-												appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s), treating as closed\n", port, refutedBy, confirmations))
-											} else {
-												appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", port, refutedBy))
-											}
-										case scanner.QuorumOpen:
-											svc := scanner.PortService(port)
-											if svc == "" {
-												svc = "unknown"
-											}
-											portLine := fmt.Sprintf("%d/tcp   open  %s", port, svc)
-											totalOpenAtomic.Add(1)
-											appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", target, port, svc, confirmations, quorum))
-											if openBanner != "" {
-												appendLog("      │  " + openBanner + "\n")
-											}
-											for vi, lbl := range openLabels {
-												branch := "├─"
-												if vi == len(openLabels)-1 {
-													branch = "└─"
-												}
-												appendLog("      " + branch + " via " + lbl + "\n")
-											}
-											primary := ""
-											if len(openLabels) > 0 {
-												primary = openLabels[0]
-											}
-											findingsMu.Lock()
-											targetFindings = append(targetFindings, Finding{Host: target, Line: portLine, ProxyURI: primary, Proxies: openLabels, Banner: openBanner})
-											findingsMu.Unlock()
-										case scanner.QuorumUnconfirmed:
-											appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed), treating as closed/filtered\n", port, confirmations, quorum))
-										default: // scanner.QuorumUnreachable
-											appendLog(fmt.Sprintf("[!] Port %d: no proxy could reach it (target may be filtered)\n", port))
+										portLine := fmt.Sprintf("%d/tcp   open  %s", oc.Port, svc)
+										totalOpenAtomic.Add(1)
+										appendLog(fmt.Sprintf("  ► OPEN  %s:%d  [%s]  (%d/%d agreed)\n", target, oc.Port, svc, oc.Confirmations, oc.Quorum))
+										if oc.Banner != "" {
+											appendLog("      │  " + oc.Banner + "\n")
 										}
-									}(startIdx, port)
+										for vi, lbl := range oc.OpenLabels {
+											branch := "├─"
+											if vi == len(oc.OpenLabels)-1 {
+												branch = "└─"
+											}
+											appendLog("      " + branch + " via " + lbl + "\n")
+										}
+										primary := ""
+										if len(oc.OpenLabels) > 0 {
+											primary = oc.OpenLabels[0]
+										}
+										findingsMu.Lock()
+										targetFindings = append(targetFindings, Finding{Host: target, Line: portLine, ProxyURI: primary, Proxies: oc.OpenLabels, Banner: oc.Banner})
+										findingsMu.Unlock()
+									case scanner.QuorumUnconfirmed:
+										appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed), treating as closed/filtered\n", oc.Port, oc.Confirmations, oc.Quorum))
+									default: // scanner.QuorumUnreachable
+										appendLog(fmt.Sprintf("[!] Port %d: no proxy could reach it (target may be filtered)\n", oc.Port))
+									}
 								}
+
+								scanner.RotateScan(ctx,
+									func(c context.Context, p *proxy.Proxy, host string, port int, tmo time.Duration) (net.Conn, error) {
+										return dialThroughProxyCtx(c, p, host, port, tmo)
+									},
+									shuffled,
+									scanner.RotateConfig{
+										Target:          target,
+										Ports:           ports,
+										Quorum:          quorum,
+										DialConcurrency: conc,
+										Timeout:         to,
+										Throttle:        throttle,
+									},
+									scanner.RotateHooks{
+										Label:       proxyViaLabel,
+										OnProxyDead: markFailed,
+										OnPortDone: func(done, total int) {
+											if total > 0 {
+												scanProgressBind.Set(float64(done) / float64(total))
+											}
+										},
+										OnOutcome: renderOutcome,
+									},
+								)
+
 							} else {
 								// More ports than proxies: chunk ports across proxies.
 								chunkSize := (len(ports) + n - 1) / n
