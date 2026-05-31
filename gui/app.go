@@ -24,6 +24,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"rofk/cli"
+	"rofk/geo"
 	"rofk/pool"
 	"rofk/proxy"
 	"rofk/relay"
@@ -552,8 +553,8 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 			}
 
 			if len(dupeGroups) == 0 && unknownCount == 0 {
-				statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d",
-					st.pool.ValidCount(), st.pool.FailedCount(), total))
+				statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d%s",
+					st.pool.ValidCount(), st.pool.FailedCount(), total, countrySummary(valid)))
 				return
 			}
 
@@ -612,8 +613,8 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 					scroll,
 					func(remove bool) {
 						if !remove {
-							statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d",
-								st.pool.ValidCount(), st.pool.FailedCount(), total))
+							statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d%s",
+								st.pool.ValidCount(), st.pool.FailedCount(), total, countrySummary(valid)))
 							return
 						}
 						// Keep: fastest per duplicate group + verified unique egress only
@@ -642,8 +643,8 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 						st.validMu.Unlock()
 						validList.Refresh()
 						refreshCounts()
-						statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d  (%d removed)",
-							st.pool.ValidCount(), st.pool.FailedCount(), total, removed))
+						statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d  (%d removed)%s",
+							st.pool.ValidCount(), st.pool.FailedCount(), total, removed, countrySummary(st.pool.Valid())))
 					},
 					w,
 				)
@@ -789,6 +790,44 @@ func proxyViaLabel(p *proxy.Proxy) string {
 		return p.URI() + " [exit: " + exit + "]"
 	}
 	return p.URI()
+}
+
+// countrySummary returns a short "N countries (US 12, DE 7, …)" breakdown of a
+// pool's egress countries, or "" when none are known. Used in the validation
+// status line so the user can see their coverage for region-block checks.
+func countrySummary(valid []*proxy.Proxy) string {
+	counts := map[string]int{}
+	for _, p := range valid {
+		if p.Country != "" {
+			counts[p.Country]++
+		}
+	}
+	if len(counts) == 0 {
+		return ""
+	}
+	type cc struct {
+		code string
+		n    int
+	}
+	ccs := make([]cc, 0, len(counts))
+	for c, n := range counts {
+		ccs = append(ccs, cc{c, n})
+	}
+	sort.Slice(ccs, func(i, j int) bool {
+		if ccs[i].n != ccs[j].n {
+			return ccs[i].n > ccs[j].n
+		}
+		return ccs[i].code < ccs[j].code
+	})
+	parts := make([]string, 0, 5)
+	for i, c := range ccs {
+		if i == 4 {
+			parts = append(parts, fmt.Sprintf("+%d more", len(ccs)-4))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s %d", c.code, c.n))
+	}
+	return fmt.Sprintf("  %d countries (%s)", len(counts), strings.Join(parts, ", "))
 }
 
 // target may be a single host/CIDR or space-separated IPs (for chunk rotation).
@@ -1669,10 +1708,14 @@ func runExternalTool(ctx context.Context, _ fyne.Window, _ *state,
 // ── Hosts tab ─────────────────────────────────────────────────────────────────
 
 func buildHostsTab(st *state) fyne.CanvasObject {
+	// selHost is an index into st.hostsSlice (append-only, so stable). The
+	// selected port is tracked by pointer identity (PortEntry pointers are
+	// stable across rescans) so re-sorting or live refreshes never desync it.
 	var selHost atomic.Int32
-	var selPort atomic.Int32
 	selHost.Store(-1)
-	selPort.Store(-1)
+	var selPortEntry *PortEntry // current port selection; main-thread only
+	var showingGeo bool         // detail pane currently shows a geo-block report
+	var geoRunning atomic.Bool
 
 	monoStyle := widget.RichTextStyle{TextStyle: fyne.TextStyle{Monospace: true}}
 	headerStyle := widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true, Monospace: true}}
@@ -1680,82 +1723,93 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 		TextStyle: fyne.TextStyle{Monospace: true},
 		ColorName: theme.ColorNameSuccess,
 	}
+	warnStyle := widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true, Monospace: true}, ColorName: theme.ColorNameWarning}
+	okStyle := widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true, Monospace: true}, ColorName: theme.ColorNameSuccess}
 
-	// ── Port-detail pane (right): full proxy list for the selected port ──
 	detailRich := widget.NewRichText()
-	detailRich.Wrapping = fyne.TextWrapOff
+	detailRich.Wrapping = fyne.TextWrapWord
 	detailScroll := container.NewVScroll(detailRich)
 
-	showPortDetail := func(hostIdx, portIdx int) {
+	setDetail := func(segs []widget.RichTextSegment) {
+		detailRich.Segments = segs
+		detailRich.Refresh()
+	}
+
+	// ── Port view: a sorted copy of the selected host's ports, decoupled from
+	// storage order so sorting never corrupts HostRecord.portIdx ──
+	var portView []*PortEntry
+	var sortSelect *widget.Select
+
+	sortPortView := func() {
+		switch sortSelect.Selected {
+		case "Port ↓":
+			sort.SliceStable(portView, func(i, j int) bool { return portView[i].Port > portView[j].Port })
+		case "Service":
+			sort.SliceStable(portView, func(i, j int) bool {
+				if portView[i].Service != portView[j].Service {
+					return portView[i].Service < portView[j].Service
+				}
+				return portView[i].Port < portView[j].Port
+			})
+		case "Most proxies":
+			sort.SliceStable(portView, func(i, j int) bool {
+				if len(portView[i].Proxies) != len(portView[j].Proxies) {
+					return len(portView[i].Proxies) > len(portView[j].Proxies)
+				}
+				return portView[i].Port < portView[j].Port
+			})
+		default: // "Port ↑"
+			sort.SliceStable(portView, func(i, j int) bool { return portView[i].Port < portView[j].Port })
+		}
+	}
+	rebuildPortView := func() {
+		hi := int(selHost.Load())
+		portView = portView[:0]
 		st.hostsMu.RLock()
-		defer st.hostsMu.RUnlock()
-		if hostIdx < 0 || hostIdx >= len(st.hostsSlice) {
-			detailRich.Segments = []widget.RichTextSegment{
-				&widget.TextSegment{Text: "← Select a host, then a port", Style: monoStyle},
-			}
-			detailRich.Refresh()
+		if hi >= 0 && hi < len(st.hostsSlice) {
+			portView = append(portView, st.hostsSlice[hi].Ports...)
+		}
+		st.hostsMu.RUnlock()
+		sortPortView()
+	}
+
+	// renderProxies shows the validating-proxy list for one port.
+	renderProxies := func(pe *PortEntry) {
+		showingGeo = false
+		if pe == nil {
+			setDetail([]widget.RichTextSegment{&widget.TextSegment{
+				Text: "↑ Select a port to see every proxy that validated it, or run a geo-block check.", Style: monoStyle}})
 			return
 		}
-		h := st.hostsSlice[hostIdx]
-		if portIdx < 0 || portIdx >= len(h.Ports) {
-			detailRich.Segments = []widget.RichTextSegment{
-				&widget.TextSegment{Text: "↑ Select a port to see every proxy that validated it", Style: monoStyle},
-			}
-			detailRich.Refresh()
-			return
-		}
-		pe := h.Ports[portIdx]
 		var segs []widget.RichTextSegment
-		segs = append(segs, &widget.TextSegment{
-			Text:  fmt.Sprintf("%d/%s   %s\n", pe.Port, pe.Proto, pe.Service),
-			Style: headerStyle,
-		})
+		segs = append(segs, &widget.TextSegment{Text: fmt.Sprintf("%d/%s   %s\n", pe.Port, pe.Proto, pe.Service), Style: headerStyle})
 		if pe.Version != "" {
 			segs = append(segs, &widget.TextSegment{Text: "version: " + pe.Version + "\n", Style: monoStyle})
 		}
 		if pe.Banner != "" {
 			segs = append(segs, &widget.TextSegment{Text: "banner:  " + pe.Banner + "\n", Style: monoStyle})
 		}
-		segs = append(segs, &widget.TextSegment{Text: strings.Repeat("─", 60) + "\n", Style: monoStyle})
-		segs = append(segs, &widget.TextSegment{
-			Text:  fmt.Sprintf("validated by %d proxy/proxies:\n", len(pe.Proxies)),
-			Style: headerStyle,
-		})
+		segs = append(segs, &widget.TextSegment{Text: strings.Repeat("─", 56) + "\n", Style: monoStyle})
+		segs = append(segs, &widget.TextSegment{Text: fmt.Sprintf("validated by %d proxy/proxies:\n", len(pe.Proxies)), Style: headerStyle})
 		for _, p := range pe.Proxies {
 			segs = append(segs, &widget.TextSegment{Text: "  " + p + "\n", Style: viaStyle})
 		}
-		detailRich.Segments = segs
-		detailRich.Refresh()
+		setDetail(segs)
 	}
 
-	// ── Port list (middle): one row per open port, deduped ──
+	// ── Middle: sortable port list ──
 	portList := widget.NewList(
-		func() int {
-			st.hostsMu.RLock()
-			defer st.hostsMu.RUnlock()
-			hi := int(selHost.Load())
-			if hi < 0 || hi >= len(st.hostsSlice) {
-				return 0
-			}
-			return len(st.hostsSlice[hi].Ports)
-		},
+		func() int { return len(portView) },
 		func() fyne.CanvasObject {
 			l := widget.NewLabel("")
 			l.TextStyle = fyne.TextStyle{Monospace: true}
 			return l
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			st.hostsMu.RLock()
-			defer st.hostsMu.RUnlock()
-			hi := int(selHost.Load())
-			if hi < 0 || hi >= len(st.hostsSlice) {
+			if id < 0 || id >= len(portView) {
 				return
 			}
-			ports := st.hostsSlice[hi].Ports
-			if id >= len(ports) {
-				return
-			}
-			pe := ports[id]
+			pe := portView[id]
 			detail := pe.Version
 			if detail == "" {
 				detail = pe.Banner
@@ -1768,20 +1822,30 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 		},
 	)
 	portList.OnSelected = func(id widget.ListItemID) {
-		selPort.Store(int32(id))
-		showPortDetail(int(selHost.Load()), id)
+		if id < 0 || id >= len(portView) {
+			return
+		}
+		selPortEntry = portView[id]
+		renderProxies(selPortEntry)
 	}
 
-	// ── Host list (left) ──
+	sortSelect = widget.NewSelect([]string{"Port ↑", "Port ↓", "Service", "Most proxies"}, func(string) {
+		selPortEntry = nil
+		portList.UnselectAll()
+		rebuildPortView()
+		portList.Refresh()
+		renderProxies(nil)
+	})
+	sortSelect.Selected = "Port ↑"
+
+	// ── Left: host list ──
 	hostList := widget.NewList(
 		func() int {
 			st.hostsMu.RLock()
 			defer st.hostsMu.RUnlock()
 			return len(st.hostsSlice)
 		},
-		func() fyne.CanvasObject {
-			return widget.NewLabel("")
-		},
+		func() fyne.CanvasObject { return widget.NewLabel("") },
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			st.hostsMu.RLock()
 			defer st.hostsMu.RUnlock()
@@ -1793,34 +1857,140 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 	)
 	hostList.OnSelected = func(id widget.ListItemID) {
 		selHost.Store(int32(id))
-		selPort.Store(-1)
+		selPortEntry = nil
+		rebuildPortView()
 		portList.UnselectAll()
 		portList.Refresh()
-		showPortDetail(id, -1)
+		renderProxies(nil)
 	}
 
-	// hostsRefresh is invoked from scan worker goroutines (via pushFindings),
-	// so all widget updates run on the main thread via fyne.Do.
+	// ── Right: geo-block check ──
+	// renderGeoReport draws a region-block report for host:port into the detail pane.
+	renderGeoReport := func(host string, port int, r scanner.RegionReport) {
+		showingGeo = true
+		var segs []widget.RichTextSegment
+		segs = append(segs, &widget.TextSegment{Text: fmt.Sprintf("Geo-block check  %s:%d\n", host, port), Style: headerStyle})
+		switch r.Verdict {
+		case scanner.RegionBlockedSomewhere:
+			segs = append(segs, &widget.TextSegment{Text: "⚠ PORT APPEARS GEO-BLOCKED\n", Style: warnStyle})
+		case scanner.RegionOpenEverywhere:
+			segs = append(segs, &widget.TextSegment{Text: "✓ open from every country tested (no geo-block detected)\n", Style: okStyle})
+		default:
+			segs = append(segs, &widget.TextSegment{Text: "Inconclusive (need a country that can reach the port to compare)\n", Style: monoStyle})
+		}
+		cc := func(codes []string) string {
+			var parts []string
+			for _, c := range codes {
+				parts = append(parts, geo.Name(c)+" ("+c+")")
+			}
+			return strings.Join(parts, ", ")
+		}
+		if len(r.OpenIn) > 0 {
+			segs = append(segs, &widget.TextSegment{Text: "open from:    " + cc(r.OpenIn) + "\n", Style: monoStyle})
+		}
+		if len(r.BlockedIn) > 0 {
+			segs = append(segs, &widget.TextSegment{Text: "blocked from: " + cc(r.BlockedIn) + "\n", Style: monoStyle})
+		}
+		segs = append(segs, &widget.TextSegment{Text: strings.Repeat("─", 56) + "\n", Style: monoStyle})
+		segs = append(segs, &widget.TextSegment{Text: "per country (proxies probed):\n", Style: headerStyle})
+		for _, p := range r.Probes {
+			label := geo.Name(p.Country)
+			if p.Country == "??" {
+				label = "unknown egress"
+			}
+			tag := ""
+			switch p.Status() {
+			case scanner.RegionStatusOpen:
+				tag = "open"
+			case scanner.RegionStatusBlocked:
+				tag = "blocked"
+			default:
+				tag = "inconclusive"
+			}
+			segs = append(segs, &widget.TextSegment{
+				Text:  fmt.Sprintf("  %-2s %-26s  open %d  refused %d  err %d   %s\n", p.Country, label, p.Open, p.Refused, p.Errored, tag),
+				Style: monoStyle,
+			})
+		}
+		setDetail(segs)
+	}
+
+	btnGeo := widget.NewButton("Check geo-block", func() {
+		hi := int(selHost.Load())
+		pe := selPortEntry
+		if hi < 0 || pe == nil {
+			setDetail([]widget.RichTextSegment{&widget.TextSegment{Text: "Select a host and a port first.", Style: monoStyle}})
+			return
+		}
+		if geoRunning.Load() {
+			return
+		}
+		var host string
+		st.hostsMu.RLock()
+		if hi < len(st.hostsSlice) {
+			host = st.hostsSlice[hi].IP
+		}
+		st.hostsMu.RUnlock()
+		port := pe.Port
+
+		// Group the live valid pool by egress country.
+		byCountry := map[string][]*proxy.Proxy{}
+		for _, p := range st.pool.Valid() {
+			c := p.Country
+			if c == "" {
+				c = "??"
+			}
+			byCountry[c] = append(byCountry[c], p)
+		}
+		// Need at least two *known* countries to draw any contrast.
+		known := 0
+		for c := range byCountry {
+			if c != "??" {
+				known++
+			}
+		}
+		if known < 2 {
+			setDetail([]widget.RichTextSegment{&widget.TextSegment{
+				Text: "Need proxies from at least 2 known countries to compare.\nValidate more proxies (country is detected from each proxy's egress IP).", Style: monoStyle}})
+			return
+		}
+
+		geoRunning.Store(true)
+		setDetail([]widget.RichTextSegment{&widget.TextSegment{Text: fmt.Sprintf("Probing %s:%d from %d countries…", host, port, known), Style: monoStyle}})
+		to := time.Duration(float64(time.Second) * st.timeout)
+		go func() {
+			defer geoRunning.Store(false)
+			ctx, cancel := context.WithTimeout(context.Background(), to*4+10*time.Second)
+			defer cancel()
+			probes := scanner.ProbeRegion(ctx, dialThroughProxyCtx, byCountry, host, port, to, 3, 50)
+			report := scanner.DecideRegionBlock(probes)
+			fyne.Do(func() { renderGeoReport(host, port, report) })
+		}()
+	})
+
+	// hostsRefresh runs on the main thread (via fyne.Do) when new findings land.
 	st.hostsRefresh = func() {
 		fyne.Do(func() {
 			hostList.Refresh()
+			rebuildPortView()
 			portList.Refresh()
-			if hi := int(selHost.Load()); hi >= 0 {
-				showPortDetail(hi, int(selPort.Load()))
+			if !showingGeo {
+				renderProxies(selPortEntry)
 			}
 		})
 	}
-	showPortDetail(-1, -1)
+	renderProxies(nil)
 
 	btnClear := widget.NewButton("Clear All", func() {
 		st.clearHosts()
 		selHost.Store(-1)
-		selPort.Store(-1)
+		selPortEntry = nil
+		portView = portView[:0]
 		hostList.UnselectAll()
 		portList.UnselectAll()
 		hostList.Refresh()
 		portList.Refresh()
-		showPortDetail(-1, -1)
+		renderProxies(nil)
 	})
 
 	leftPanel := container.NewBorder(
@@ -1834,18 +2004,22 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 	)
 
 	midPanel := container.NewBorder(
-		widget.NewLabelWithStyle("Open Ports", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewBorder(nil, nil,
+			widget.NewLabelWithStyle("Open Ports", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			sortSelect, nil),
 		nil, nil, nil,
 		portList,
 	)
 
 	rightPanel := container.NewBorder(
-		widget.NewLabelWithStyle("Validating Proxies", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewBorder(nil, nil,
+			widget.NewLabelWithStyle("Port detail", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			btnGeo, nil),
 		nil, nil, nil,
 		detailScroll,
 	)
 
-	// hosts | ports | proxies
+	// hosts | ports | detail
 	inner := container.NewHSplit(midPanel, rightPanel)
 	inner.Offset = 0.5
 	split := container.NewHSplit(leftPanel, inner)
