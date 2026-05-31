@@ -10,7 +10,7 @@ import (
 
 // execRun streams cmd stdout+stderr to log line-by-line.
 func execRun(ctx context.Context, cmd []string, log func(string)) {
-	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...) //#nosec G204 -- command is operator-supplied, run locally by the user
 	stdout, err := c.StdoutPipe()
 	if err != nil {
 		log("[-] pipe: " + err.Error() + "\n")
@@ -64,7 +64,7 @@ func parsePortLine(line string) PortDetail {
 // execNmapParsed streams nmap output in real-time, highlights open ports,
 // annotates each with the proxy that found it, and returns findings.
 func execNmapParsed(ctx context.Context, cmd []string, proxyURI string, log func(string)) (openPorts int, hostDown bool, findings []Finding) {
-	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...) //#nosec G204 -- nmap argv is built from operator-supplied scan flags, run locally
 	stdout, err := c.StdoutPipe()
 	if err != nil {
 		log("[-] pipe: " + err.Error() + "\n")

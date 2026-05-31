@@ -240,7 +240,7 @@ func socks4aConnect(conn net.Conn, host string, port int) error {
 		0x04, 0x01,
 		byte(port >> 8), byte(port),
 		0x00, 0x00, 0x00, 0x01, // 0.0.0.1 → SOCKS4a marker
-		0x00,                    // empty user-id (null-terminated)
+		0x00, // empty user-id (null-terminated)
 	}
 	req = append(req, []byte(host)...)
 	req = append(req, 0x00) // null-terminate hostname

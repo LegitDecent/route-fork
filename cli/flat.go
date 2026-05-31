@@ -52,9 +52,9 @@ var nmapValueFlags = map[string]bool{
 	"-iL": true, "-iR": true,
 	"-e": true, "-S": true, "--source-port": true, "-g": true, "-D": true,
 	"--proxies": true,
-	"--data": true, "--data-string": true, "--data-length": true,
+	"--data":    true, "--data-string": true, "--data-length": true,
 	"--ip-options": true,
-	"--ttl": true, "--spoof-mac": true,
+	"--ttl":        true, "--spoof-mac": true,
 	"--port-ratio": true, "--top-ports": true,
 	"--version-intensity": true,
 }
@@ -204,10 +204,8 @@ func RunFlatMode(args []string) {
 	var allResults []ScanResult
 
 	for _, target := range fa.targets {
-		select {
-		case <-ctx.Done():
-			break
-		default:
+		if ctx.Err() != nil {
+			break // interrupted; stop processing further targets
 		}
 
 		px := pl.Next(fa.wrap)
@@ -253,7 +251,7 @@ func writeOutputFile(path, format string, results []ScanResult) error {
 	if path == "-" {
 		return WriteResults(os.Stdout, results, format)
 	}
-	f, err := os.Create(path)
+	f, err := os.Create(path) //#nosec G304 -- path is the operator-supplied output file
 	if err != nil {
 		return err
 	}
@@ -318,7 +316,7 @@ var (
 
 func execFlatNmap(ctx context.Context, cmd []string, proxyURI string) (results []ScanResult, hostDown bool) {
 	fmt.Fprintln(os.Stderr, "  CMD:", strings.Join(cmd, " "))
-	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...) //#nosec G204 -- nmap argv is built from operator-supplied scan flags, run locally
 	c.Stderr = os.Stderr
 	stdout, err := c.StdoutPipe()
 	if err != nil {
@@ -380,7 +378,7 @@ func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
 		if len(snap) == 0 {
 			return pl.Next(wrap)
 		}
-		return snap[rand.Intn(len(snap))]
+		return snap[rand.Intn(len(snap))] //#nosec G404 -- non-cryptographic shuffle for proxy rotation
 	}
 
 	go func() {

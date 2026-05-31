@@ -73,7 +73,7 @@ jobs:
           CGO_ENABLED: 1
         shell: bash
         run: |
-          go build -trimpath -ldflags="-s -w" \
+          go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
             -o rofk-${{ matrix.suffix }}${{ matrix.ext || '' }} .
 
       - name: Upload artifact
@@ -85,6 +85,10 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the release and upload assets
+      id-token: write       # cosign keyless signing + provenance OIDC
+      attestations: write   # SLSA build provenance attestation
     steps:
       - uses: actions/checkout@v6
 
@@ -94,6 +98,35 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate SHA-256 checksums
+        working-directory: dist
+        run: sha256sum rofk-* > SHA256SUMS
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/rofk.sbom.spdx.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign artifacts (keyless / Sigstore)
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          for f in rofk-* SHA256SUMS rofk.sbom.spdx.json; do
+            cosign sign-blob --yes "$f" \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.pem"
+          done
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/rofk-*'
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
@@ -102,6 +135,12 @@ jobs:
             ## Install
 
             Download the binary for your platform from the **Assets** section below.
+
+            **Verify your download** (optional but recommended):
+            - Checksums: `sha256sum -c SHA256SUMS` (after downloading `SHA256SUMS`).
+            - Signature (Sigstore): `cosign verify-blob rofk-<platform> --signature rofk-<platform>.sig --certificate rofk-<platform>.pem --certificate-identity-regexp '.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+            - Build provenance: `gh attestation verify rofk-<platform> --repo ${{ github.repository }}`.
+            - `SBOM` (SPDX) is attached as `rofk.sbom.spdx.json`.
 
             ### macOS
             Apple Silicon (M1/M2/M3) → `rofk-macos-arm64`.

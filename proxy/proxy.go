@@ -74,14 +74,14 @@ func ParseLine(line string) *Proxy {
 	switch len(parts) {
 	case 4:
 		port, err := strconv.Atoi(parts[1])
-		if err != nil || port < 1 || port > 65535 {
+		if err != nil || port < 1 || port > 65535 || parts[0] == "" {
 			break
 		}
 		return &Proxy{Host: parts[0], Port: port, Proto: "socks5",
 			Username: parts[2], Password: parts[3]}
 	case 2:
 		port, err := strconv.Atoi(parts[1])
-		if err != nil || port < 1 || port > 65535 {
+		if err != nil || port < 1 || port > 65535 || parts[0] == "" {
 			break
 		}
 		return &Proxy{Host: parts[0], Port: port, Proto: "socks5"}

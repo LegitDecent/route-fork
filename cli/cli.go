@@ -331,7 +331,7 @@ func buildNmapArgv(ports, extra, proxyArg, target string, addPn bool) []string {
 // execNmapParsed runs nmap, prints open ports prominently, returns (openCount, hostDown).
 func execNmapParsed(ctx context.Context, cmd []string) (openPorts int, hostDown bool) {
 	fmt.Fprintln(os.Stderr, "  CMD:", strings.Join(cmd, " "))
-	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...) //#nosec G204 -- nmap argv is built from operator-supplied scan flags, run locally
 	c.Stderr = os.Stderr
 
 	stdout, err := c.StdoutPipe()
@@ -366,7 +366,7 @@ func execNmapParsed(ctx context.Context, cmd []string) (openPorts int, hostDown 
 func readText(path string) string {
 	var sc *bufio.Scanner
 	if path != "" {
-		f, err := os.Open(path)
+		f, err := os.Open(path) //#nosec G304 -- path is the operator-supplied proxy-list file
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "open:", err)
 			os.Exit(1)

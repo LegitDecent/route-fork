@@ -4,6 +4,43 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [v1.4.3] — 2026-05-31
+
+Production-readiness pass: static analysis, supply-chain integrity, fuzzing, and
+project governance. Two real robustness bugs (found by the new fuzzers) fixed.
+
+### Security
+- **SAST in CI** — `golangci-lint` (govet, staticcheck, errcheck, gosec,
+  ineffassign, misspell, unconvert) and GitHub **CodeQL** (`security-extended`).
+- **Secret scanning** — `gitleaks` over full history on every push/PR.
+- **Scheduled vuln scan** — `govulncheck` now also runs weekly, catching newly
+  disclosed CVEs in unchanged dependencies.
+- **Dependabot** — weekly grouped updates for Go modules and GitHub Actions.
+- **Supply chain on releases** — SHA-256 `SHA256SUMS`, an SPDX **SBOM**, Sigstore
+  (**cosign**) keyless signatures, and **SLSA build provenance**. Least-privilege
+  `GITHUB_TOKEN` permissions across all workflows.
+- **OpenSSF Scorecard** workflow and badge.
+
+### Fixed
+- **`ParseLine` accepted an empty host** (e.g. `:1` produced a hostless proxy);
+  now rejected. Found by fuzzing.
+- **`ParsePorts` could allocate unbounded memory** on a crafted spec (many
+  overlapping ranges); expansion is now capped. Found by fuzzing.
+- Corrected a `break` inside a `select` that did not actually stop the CLI's
+  target loop on interrupt.
+
+### Added
+- **Fuzz tests** for the untrusted-input parsers (proxy lines, port specs,
+  egress-IP extraction, banner sanitisation), with the crash inputs kept as
+  regression seeds.
+- **`rofk version`** reports version, platform, and Go toolchain. Release builds
+  stamp the tag via `-ldflags -X main.version`.
+- Test suite now runs under the **race detector** in CI with a coverage summary.
+- **Governance** — `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
+  issue/PR templates, `CODEOWNERS`, and a `docs/THREAT_MODEL.md`.
+
+---
+
 ## [v1.4.2] — 2026-05-31
 
 ### Security

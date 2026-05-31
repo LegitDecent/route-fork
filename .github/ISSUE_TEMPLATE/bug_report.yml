@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a problem with Route Fork
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do **not** report security vulnerabilities here. Use the Security tab
+        (see SECURITY.md). Do not paste real proxy lists or credentials.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `rofk version`
+      placeholder: "rofk v1.4.3 linux/amd64 go1.25.10"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands or clicks. Redact any sensitive values.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / platform
+      placeholder: "macOS 15 arm64 / Ubuntu 24.04 amd64 / Windows 11"
+    validations:
+      required: true

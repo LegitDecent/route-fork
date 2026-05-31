@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/LegitDecent/route-fork/security/advisories/new
+    about: Report security issues privately, not as a public issue (see SECURITY.md).
+  - name: Question or idea
+    url: https://github.com/LegitDecent/route-fork/discussions
+    about: Use Discussions for questions and feature ideas.

@@ -37,12 +37,18 @@ func TestProxyThrottle(t *testing.T) {
 
 func TestProxyThrottleDisabled(t *testing.T) {
 	var nilT *ProxyThrottle
-	if !nilT.Ready("x:1") || !nilT.Ready("x:1") {
-		t.Error("nil throttle should always be ready")
+	if !nilT.Ready("x:1") {
+		t.Error("nil throttle should always be ready (1st call)")
+	}
+	if !nilT.Ready("x:1") {
+		t.Error("nil throttle should always be ready (2nd call)")
 	}
 
 	zero := NewProxyThrottle(0)
-	if !zero.Ready("x:1") || !zero.Ready("x:1") {
-		t.Error("zero-interval throttle should always be ready")
+	if !zero.Ready("x:1") {
+		t.Error("zero-interval throttle should always be ready (1st call)")
+	}
+	if !zero.Ready("x:1") {
+		t.Error("zero-interval throttle should always be ready (2nd call)")
 	}
 }

@@ -35,6 +35,12 @@ func DefaultOptions() Options {
 	return Options{Ports: "1-65535", Concurrency: 200, Timeout: 5 * time.Second}
 }
 
+// maxParsedPorts bounds the total ports a single spec may expand to, guarding
+// against pathological specs (e.g. many overlapping "1-65535" ranges) that
+// would otherwise allocate unbounded memory. 1<<20 is far above any real scan
+// (16x the entire port space) while keeping allocation bounded.
+const maxParsedPorts = 1 << 20
+
 // ParsePorts converts a spec like "22,80,443,1000-2000" into a slice of port ints.
 func ParsePorts(spec string) ([]int, error) {
 	var ports []int
@@ -47,6 +53,9 @@ func ParsePorts(spec string) ([]int, error) {
 			if e1 != nil || e2 != nil || start < 1 || end > 65535 || start > end {
 				return nil, fmt.Errorf("invalid range: %s", part)
 			}
+			if len(ports)+(end-start+1) > maxParsedPorts {
+				return nil, fmt.Errorf("port spec expands to too many ports (limit %d)", maxParsedPorts)
+			}
 			for i := start; i <= end; i++ {
 				ports = append(ports, i)
 			}
@@ -54,6 +63,9 @@ func ParsePorts(spec string) ([]int, error) {
 			n, err := strconv.Atoi(part)
 			if err != nil || n < 1 || n > 65535 {
 				return nil, fmt.Errorf("invalid port: %s", part)
+			}
+			if len(ports)+1 > maxParsedPorts {
+				return nil, fmt.Errorf("port spec expands to too many ports (limit %d)", maxParsedPorts)
 			}
 			ports = append(ports, n)
 		}

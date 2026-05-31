@@ -844,7 +844,9 @@ func guiBuiltinScan(ctx context.Context, getProxy func() *proxy.Proxy, target, p
 	}
 	results := make(chan scanner.Result, 512)
 	go func() {
-		scanner.Scan(ctx, getProxy, target, opts, results,
+		// Error is intentionally ignored here: cancellation and per-port
+		// failures are surfaced through the results channel and the log.
+		_ = scanner.Scan(ctx, getProxy, target, opts, results,
 			func(done, total int) {
 				prog.Set(float64(done) / float64(total))
 			})
@@ -1815,8 +1817,7 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 	}
 
 	// ── Port list (middle): one row per open port, deduped ──
-	var portList *widget.List
-	portList = widget.NewList(
+	portList := widget.NewList(
 		func() int {
 			st.hostsMu.RLock()
 			defer st.hostsMu.RUnlock()
@@ -1839,7 +1840,7 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 				return
 			}
 			ports := st.hostsSlice[hi].Ports
-			if int(id) >= len(ports) {
+			if id >= len(ports) {
 				return
 			}
 			pe := ports[id]
@@ -1856,12 +1857,11 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 	)
 	portList.OnSelected = func(id widget.ListItemID) {
 		selPort.Store(int32(id))
-		showPortDetail(int(selHost.Load()), int(id))
+		showPortDetail(int(selHost.Load()), id)
 	}
 
 	// ── Host list (left) ──
-	var hostList *widget.List
-	hostList = widget.NewList(
+	hostList := widget.NewList(
 		func() int {
 			st.hostsMu.RLock()
 			defer st.hostsMu.RUnlock()
@@ -1873,7 +1873,7 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			st.hostsMu.RLock()
 			defer st.hostsMu.RUnlock()
-			if int(id) < len(st.hostsSlice) {
+			if id < len(st.hostsSlice) {
 				h := st.hostsSlice[id]
 				obj.(*widget.Label).SetText(fmt.Sprintf("%s   (%d open)", h.IP, len(h.Ports)))
 			}
@@ -1884,7 +1884,7 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 		selPort.Store(-1)
 		portList.UnselectAll()
 		portList.Refresh()
-		showPortDetail(int(id), -1)
+		showPortDetail(id, -1)
 	}
 
 	// hostsRefresh is invoked from scan worker goroutines (via pushFindings),

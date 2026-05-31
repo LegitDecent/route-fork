@@ -1,0 +1,65 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - misspell
+    - unconvert
+
+  settings:
+    gosec:
+      excludes:
+        # G104: unhandled errors. Best-effort writes to logs / network
+        # connections that are already being torn down. errcheck (below) covers
+        # the cases that matter, with curated exclusions for the benign ones.
+        - G104
+        # G115: integer overflow on conversions. False positives here -- every
+        # flagged conversion (byte(port>>8), uint16(port), int32(listID)) is on a
+        # value already validated to its range (ports 1-65535, small slice indices).
+        - G115
+
+    errcheck:
+      # Best-effort calls whose errors are intentionally ignored: diagnostic
+      # writes, UI bindings that never error, and connection/process teardown
+      # that cannot meaningfully be recovered.
+      exclude-functions:
+        - (net.Conn).Write
+        - (net.Conn).SetDeadline
+        - (net.Conn).SetReadDeadline
+        - (net.Conn).SetWriteDeadline
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (*os.File).Close
+        - (*os.File).Write
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*flag.FlagSet).Parse
+        - io.ReadFull
+        - io.Copy
+        - (*os/exec.Cmd).Wait
+        # Fyne file dialog readers/writers in GUI import/export paths (best effort).
+        - (fyne.io/fyne/v2.URIWriteCloser).Write
+        - (fyne.io/fyne/v2.URIWriteCloser).Close
+        - (fyne.io/fyne/v2.URIReadCloser).Close
+
+  exclusions:
+    rules:
+      # Test mock servers do plenty of best-effort I/O; don't lint them as
+      # strictly as production code.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      # Fyne data-binding setters (binding.String/Float .Set) return an error
+      # that is always nil for these in-memory bindings; the GUI updates them
+      # fire-and-forget. errcheck can't match them by qualified interface name,
+      # so exclude by call site.
+      - linters:
+          - errcheck
+        source: '\.Set\('

@@ -1,0 +1,8 @@
+# Default owner for everything in the repo.
+*       @LegitDecent
+
+# Security-sensitive areas get explicit ownership.
+/.github/        @LegitDecent
+/proxy/          @LegitDecent
+/relay/          @LegitDecent
+/SECURITY.md     @LegitDecent
