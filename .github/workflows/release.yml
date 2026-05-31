@@ -117,9 +117,7 @@ jobs:
         run: |
           shopt -s nullglob
           for f in rofk-* SHA256SUMS rofk.sbom.spdx.json; do
-            cosign sign-blob --yes "$f" \
-              --output-signature "$f.sig" \
-              --output-certificate "$f.pem"
+            cosign sign-blob --yes --bundle "$f.cosign.bundle" "$f"
           done
 
       - name: Attest build provenance (SLSA)
@@ -138,7 +136,7 @@ jobs:
 
             **Verify your download** (optional but recommended):
             - Checksums: `sha256sum -c SHA256SUMS` (after downloading `SHA256SUMS`).
-            - Signature (Sigstore): `cosign verify-blob rofk-<platform> --signature rofk-<platform>.sig --certificate rofk-<platform>.pem --certificate-identity-regexp '.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+            - Signature (Sigstore): `cosign verify-blob rofk-<platform> --bundle rofk-<platform>.cosign.bundle --certificate-identity-regexp '.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
             - Build provenance: `gh attestation verify rofk-<platform> --repo ${{ github.repository }}`.
             - `SBOM` (SPDX) is attached as `rofk.sbom.spdx.json`.
 
