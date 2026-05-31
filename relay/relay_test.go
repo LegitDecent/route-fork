@@ -458,7 +458,7 @@ func dialSOCKS4a(t *testing.T, relayAddr, hostname string, port int) net.Conn {
 		0x04, 0x01,
 		byte(port >> 8), byte(port),
 		0x00, 0x00, 0x00, 0x01, // SOCKS4a marker
-		0x00,                    // empty userid
+		0x00, // empty userid
 	}
 	req = append(req, []byte(hostname)...)
 	req = append(req, 0x00) // null-terminate hostname

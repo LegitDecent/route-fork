@@ -80,8 +80,8 @@ func TestParseLineInvalid(t *testing.T) {
 		"",
 		"# comment",
 		"notaproxy",
-		"1.2.3.4:99999",  // port out of range
-		"1.2.3.4:0",      // port zero
+		"1.2.3.4:99999", // port out of range
+		"1.2.3.4:0",     // port zero
 		"1.2.3.4:notaport",
 		"socks5://host:99999",
 		"socks9://host:1080", // unknown proto

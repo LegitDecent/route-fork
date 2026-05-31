@@ -18,3 +18,6 @@ rofk-local
 rofk
 rofk.exe
 coverage.out
+
+# local tooling
+bin/
