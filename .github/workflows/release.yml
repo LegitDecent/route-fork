@@ -103,14 +103,14 @@ jobs:
         run: sha256sum rofk-* > SHA256SUMS
 
       - name: Generate SBOM (SPDX)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.24.0
         with:
           path: .
           format: spdx-json
           output-file: dist/rofk.sbom.spdx.json
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign artifacts (keyless / Sigstore)
         working-directory: dist
@@ -123,7 +123,7 @@ jobs:
           done
 
       - name: Attest build provenance (SLSA)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4.1.0
         with:
           subject-path: 'dist/rofk-*'
 
