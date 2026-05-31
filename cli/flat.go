@@ -409,11 +409,17 @@ func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
 	var results []ScanResult
 	for r := range resCh {
 		if r.Open {
-			svc := scanner.PortService(r.Port)
+			svc := r.Service
+			if svc == "" {
+				svc = scanner.PortService(r.Port)
+			}
 			if svc == "" {
 				svc = "unknown"
 			}
 			fmt.Printf("  ► OPEN  %s:%d  [%s]", r.Host, r.Port, svc)
+			if r.Version != "" {
+				fmt.Printf("  %s", r.Version)
+			}
 			if r.Banner != "" {
 				fmt.Printf("  %s", r.Banner)
 			}
@@ -423,6 +429,7 @@ func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
 				Port:    r.Port,
 				Proto:   "tcp",
 				Service: svc,
+				Version: r.Version,
 				Banner:  r.Banner,
 			})
 		}

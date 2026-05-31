@@ -18,11 +18,13 @@ import (
 )
 
 type Result struct {
-	Host   string
-	Port   int
-	Open   bool
-	Proxy  *proxy.Proxy // proxy that opened this connection (nil if direct)
-	Banner string       // service banner grabbed at connect time (may be empty)
+	Host    string
+	Port    int
+	Open    bool
+	Proxy   *proxy.Proxy // proxy that opened this connection (nil if direct)
+	Service string       // service parsed from the banner ("" if none)
+	Version string       // version/detail parsed from the banner (may be empty)
+	Banner  string       // service banner grabbed at connect time (may be empty)
 }
 
 type Options struct {
@@ -168,18 +170,14 @@ func Scan(ctx context.Context, getProxy func() *proxy.Proxy, target string, opts
 				case <-time.After(opts.Timeout):
 				case conn := <-connCh:
 					if conn != nil {
-						// Grab a short service banner before closing (services
-						// that speak first, e.g. SSH/FTP/SMTP).
-						var banner string
-						conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
-						bbuf := make([]byte, 256)
-						bn, _ := conn.Read(bbuf)
-						if bn > 0 {
-							banner = CleanBanner(bbuf[:bn])
-						}
+						// Grab and parse a banner from services that speak first
+						// (SSH/FTP/SMTP/...). Shares the passive probe logic with
+						// the rotating scanner; no extra connection is made.
+						banner := readBanner(conn, opts.Timeout)
 						conn.Close()
+						svc, ver := ParseBanner(port, banner)
 						select {
-						case results <- Result{Host: host, Port: port, Open: true, Proxy: px, Banner: banner}:
+						case results <- Result{Host: host, Port: port, Open: true, Proxy: px, Service: svc, Version: ver, Banner: banner}:
 						case <-ctx.Done():
 						}
 					}
