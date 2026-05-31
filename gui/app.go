@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image/color"
 	"math/rand"
-	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -845,34 +844,6 @@ func nmapCmd(bin, ports, extra, proxyArg, target string, addPn bool) []string {
 	return args
 }
 
-// dialThroughProxyCtx wraps proxy.DialThroughProxy so a context cancellation
-// (Stop button) returns immediately instead of blocking until the dial timeout.
-// The underlying dial goroutine is left to finish on its own timeout; it holds
-// no locks and self-terminates, so leaking it briefly is harmless.
-func dialThroughProxyCtx(ctx context.Context, p *proxy.Proxy, host string, port int, to time.Duration) (net.Conn, error) {
-	type res struct {
-		c net.Conn
-		e error
-	}
-	ch := make(chan res, 1)
-	go func() {
-		c, e := proxy.DialThroughProxy(p, host, port, to)
-		ch <- res{c, e}
-	}()
-	select {
-	case <-ctx.Done():
-		// Close the connection if the dial happens to complete after cancel.
-		go func() {
-			if r := <-ch; r.c != nil {
-				r.c.Close()
-			}
-		}()
-		return nil, ctx.Err()
-	case r := <-ch:
-		return r.c, r.e
-	}
-}
-
 // ── Scanner tab ───────────────────────────────────────────────────────────────
 
 func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
@@ -1295,7 +1266,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				}
 				var deadMu sync.Mutex
 				deadSet := map[string]bool{}
-				results := scanner.RunScan(ctx, dialThroughProxyCtx,
+				results := scanner.RunScan(ctx, scanner.DialThroughProxyCtx,
 					func() []*proxy.Proxy { return st.pool.Valid() },
 					scanner.ScanRequest{
 						Targets:     []string{target},
@@ -1878,7 +1849,7 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 			defer geoRunning.Store(false)
 			ctx, cancel := context.WithTimeout(context.Background(), to*4+10*time.Second)
 			defer cancel()
-			probes := scanner.ProbeRegion(ctx, dialThroughProxyCtx, byCountry, host, port, to, 3, 50)
+			probes := scanner.ProbeRegion(ctx, scanner.DialThroughProxyCtx, byCountry, host, port, to, 3, 50)
 			report := scanner.DecideRegionBlock(probes)
 			fyne.Do(func() { renderGeoReport(host, port, report) })
 		}()

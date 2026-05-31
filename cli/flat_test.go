@@ -36,6 +36,17 @@ func TestParseFlatArgsDefaults(t *testing.T) {
 	}
 }
 
+func TestParseFlatArgsConfirm(t *testing.T) {
+	fa := parseFlatArgs([]string{"-proxlist", "p.txt", "-ip", "1.2.3.4", "-confirm", "3"})
+	if fa.confirm != 3 {
+		t.Fatalf("confirm = %d, want 3", fa.confirm)
+	}
+	def := parseFlatArgs([]string{"-proxlist", "p.txt", "-ip", "1.2.3.4"})
+	if def.confirm != 1 {
+		t.Fatalf("default confirm = %d, want 1", def.confirm)
+	}
+}
+
 func TestParseFlatArgsAllFlags(t *testing.T) {
 	args := []string{
 		"-proxlist", "proxies.txt",

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +31,7 @@ type flatArgs struct {
 	outType   string
 	tool      string
 	conc      int
+	confirm   int // built-in scan: proxies that must agree a port is open (quorum)
 	timeout   float64
 	rotate    bool
 	wrap      bool
@@ -63,6 +65,7 @@ func parseFlatArgs(args []string) flatArgs {
 	fa := flatArgs{
 		tool:    "builtin",
 		conc:    200,
+		confirm: 1,
 		timeout: 5,
 		rotate:  true,
 		wrap:    true,
@@ -118,6 +121,9 @@ func parseFlatArgs(args []string) flatArgs {
 
 		case arg == "-conc" || arg == "--conc":
 			fa.conc, _ = strconv.Atoi(consume())
+
+		case arg == "-confirm" || arg == "--confirm":
+			fa.confirm, _ = strconv.Atoi(consume())
 
 		case arg == "-timeout" || arg == "--timeout":
 			fa.timeout, _ = strconv.ParseFloat(consume(), 64)
@@ -234,7 +240,7 @@ func RunFlatMode(args []string) {
 			if ports == "" {
 				ports = "1-1024"
 			}
-			r := flatRunBuiltin(ctx, pl, target, ports, fa.conc, to, fa.wrap)
+			r := flatRunBuiltin(ctx, pl, target, ports, fa.confirm, fa.conc, to)
 			allResults = append(allResults, r...)
 		}
 
@@ -378,63 +384,102 @@ func execFlatNmap(ctx context.Context, cmd []string, proxyURI string) (results [
 // ── built-in runner ───────────────────────────────────────────────────────────
 
 func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
-	conc int, to time.Duration, wrap bool) []ScanResult {
+	confirm, conc int, to time.Duration) []ScanResult {
 
-	fmt.Fprintf(os.Stderr, "[*] Built-in scan  %s  ports:%s\n", target, ports)
-	opts := scanner.Options{Ports: ports, Concurrency: conc, Timeout: to}
-	resCh := make(chan scanner.Result, 256)
+	parsed, err := scanner.ParsePorts(ports)
+	if err != nil || len(parsed) == 0 {
+		fmt.Fprintln(os.Stderr, "[-] bad port spec:", err)
+		return nil
+	}
+	if confirm < 1 {
+		confirm = 1
+	}
+	fmt.Fprintf(os.Stderr, "[*] Built-in scan  %s  ports:%s  (need %d proxy/proxies to agree open)\n",
+		target, ports, confirm)
 
-	snap := pl.Valid()
-	getProxy := func() *proxy.Proxy {
-		if len(snap) == 0 {
-			return pl.Next(wrap)
+	printOpen := func(host string, port int, svc, ver, banner string) {
+		if svc == "" {
+			svc = "unknown"
 		}
-		return snap[rand.Intn(len(snap))] //#nosec G404 -- non-cryptographic shuffle for proxy rotation
+		fmt.Printf("  ► OPEN  %s:%d  [%s]", host, port, svc)
+		if ver != "" {
+			fmt.Printf("  %s", ver)
+		}
+		if banner != "" {
+			fmt.Printf("  %s", banner)
+		}
+		fmt.Println()
 	}
 
-	go func() {
-		err := scanner.Scan(ctx, getProxy, target, opts, resCh,
-			func(scanned, total int) {
-				if total > 0 && (scanned%5000 == 0 || scanned == total) {
-					fmt.Fprintf(os.Stderr, "\r[*] %d/%d  (%.0f%%)",
-						scanned, total, float64(scanned)/float64(total)*100)
+	var deadMu sync.Mutex
+	dead := map[string]bool{}
+
+	// Same Go-native rotating scanner the GUI uses: always proxied, quorum-
+	// confirmed, dead proxies pruned. No nmap, no direct fallback.
+	hostResults := scanner.RunScan(ctx, scanner.DialThroughProxyCtx,
+		func() []*proxy.Proxy { return pl.Valid() },
+		scanner.ScanRequest{
+			Targets:     []string{target},
+			Ports:       parsed,
+			Quorum:      confirm,
+			Concurrency: conc,
+			Timeout:     to,
+			Label:       func(p *proxy.Proxy) string { return p.URI() },
+			Shuffle:     func(ps []*proxy.Proxy) { rand.Shuffle(len(ps), func(i, j int) { ps[i], ps[j] = ps[j], ps[i] }) }, //#nosec G404 -- non-cryptographic proxy rotation
+		},
+		scanner.ScanHooks{
+			Progress: func(done, total int) {
+				if total > 0 && (done%5000 == 0 || done == total) {
+					fmt.Fprintf(os.Stderr, "\r[*] %d/%d  (%.0f%%)", done, total, float64(done)/float64(total)*100)
 				}
-			})
-		close(resCh)
-		if err != nil && err != context.Canceled {
-			fmt.Fprintln(os.Stderr, "\n[-] scan error:", err)
+			},
+			Outcome: func(_ string, oc scanner.PortOutcome) {
+				if oc.Verdict == scanner.QuorumOpen {
+					printOpen(target, oc.Port, oc.Service, oc.Version, oc.Banner)
+				}
+			},
+			Found: func(f scanner.ScanFinding) { printOpen(f.Host, f.Port, f.Service, f.Version, f.Banner) },
+			ProxyDead: func(p *proxy.Proxy) {
+				deadMu.Lock()
+				dead[p.Address()] = true
+				deadMu.Unlock()
+			},
+		})
+	fmt.Fprintln(os.Stderr)
+
+	// Prune proxy-side-dead proxies once (race-free).
+	if len(dead) > 0 {
+		var survivors []*proxy.Proxy
+		for _, p := range pl.Valid() {
+			if !dead[p.Address()] {
+				survivors = append(survivors, p)
+			}
 		}
-	}()
+		pl.SetValid(survivors)
+		fmt.Fprintf(os.Stderr, "[=] Pruned %d dead proxy/proxies (%d left)\n", len(dead), len(survivors))
+	}
 
 	var results []ScanResult
-	for r := range resCh {
-		if r.Open {
-			svc := r.Service
+	for _, hr := range hostResults {
+		for _, f := range hr.Findings {
+			svc := f.Service
 			if svc == "" {
-				svc = scanner.PortService(r.Port)
+				svc = scanner.PortService(f.Port)
 			}
 			if svc == "" {
 				svc = "unknown"
 			}
-			fmt.Printf("  ► OPEN  %s:%d  [%s]", r.Host, r.Port, svc)
-			if r.Version != "" {
-				fmt.Printf("  %s", r.Version)
-			}
-			if r.Banner != "" {
-				fmt.Printf("  %s", r.Banner)
-			}
-			fmt.Println()
 			results = append(results, ScanResult{
-				Host:    r.Host,
-				Port:    r.Port,
-				Proto:   "tcp",
+				Host:    f.Host,
+				Port:    f.Port,
+				Proto:   f.Proto,
 				Service: svc,
-				Version: r.Version,
-				Banner:  r.Banner,
+				Version: f.Version,
+				Banner:  f.Banner,
+				Proxy:   f.Primary,
 			})
 		}
 	}
-	fmt.Fprintln(os.Stderr)
 	return results
 }
 
