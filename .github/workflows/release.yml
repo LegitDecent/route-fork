@@ -55,10 +55,11 @@ jobs:
         with:
           go-version: '1.21'
 
-      # Fyne needs OpenGL + X11 headers on Linux
+      # Fyne needs OpenGL + X11 headers on Linux. apt-get update is required on
+      # the arm64 runner (its package cache isn't pre-warmed like ubuntu-latest).
       - name: Install Linux build dependencies
         if: matrix.goos == 'linux'
-        run: sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
 
       # Fyne needs GCC (MinGW) on Windows for CGO
       - name: Add MinGW to PATH (Windows)
