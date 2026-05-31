@@ -150,7 +150,7 @@ host:port:user:pass
 
 ## Build from source
 
-Requires [Go 1.21+](https://go.dev/dl/).
+Requires [Go 1.25+](https://go.dev/dl/).
 
 ```bash
 git clone https://github.com/LegitDecent/route-fork

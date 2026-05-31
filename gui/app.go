@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"math/rand"
 	"net"
 	"os"
@@ -265,11 +266,20 @@ func (st *state) clearHosts() {
 	st.hostsMu.Unlock()
 }
 
+// forcedDarkTheme wraps the default theme and always reports the dark variant,
+// keeping the app dark regardless of the OS appearance. This replaces the
+// deprecated theme.DarkTheme() (removed in favour of variant-based theming).
+type forcedDarkTheme struct{ fyne.Theme }
+
+func (forcedDarkTheme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
+	return theme.DefaultTheme().Color(name, theme.VariantDark)
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 func Run() {
 	a := app.NewWithID("com.rofk.app")
-	a.Settings().SetTheme(theme.DarkTheme())
+	a.Settings().SetTheme(forcedDarkTheme{theme.DefaultTheme()})
 
 	w := a.NewWindow("SOCKS Proxy Manager")
 	w.Resize(fyne.NewSize(1100, 720))
@@ -356,7 +366,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 		statusBind.Set(fmt.Sprintf("Valid: %d   Failed: %d   Total: %d", v, f, v+f))
 	}
 	// Expose refresh hooks for auto-revalidation and mid-scan pruning.
-	st.refreshValidList = func() { validList.Refresh() }
+	st.refreshValidList = func() { fyne.Do(func() { validList.Refresh() }) }
 	st.refreshCounts = refreshCounts
 
 	// ── Toolbar buttons ──
@@ -451,7 +461,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 		go func() {
 			defer func() {
 				st.valRunning.Store(false)
-				btnValidate.SetText("▶  Validate All")
+				fyne.Do(func() { btnValidate.SetText("▶  Validate All") })
 			}()
 
 			total := len(proxies)
@@ -485,7 +495,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 						st.validMu.Lock()
 						st.validRows = append(st.validRows, p.DisplayValid())
 						st.validMu.Unlock()
-						validList.Refresh()
+						fyne.Do(func() { validList.Refresh() })
 					} else {
 						p.Status = proxy.StatusInvalid
 						p.FailReason = errStr
@@ -493,7 +503,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 						st.failedMu.Lock()
 						st.failedRows = append(st.failedRows, p.DisplayFailed())
 						st.failedMu.Unlock()
-						failedList.Refresh()
+						fyne.Do(func() { failedList.Refresh() })
 					}
 					n := done.Add(1)
 					pct := float64(n) / float64(total)
@@ -594,50 +604,52 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 			scroll.SetMinSize(fyne.NewSize(580, 340))
 
 			removed := totalDupes + unknownCount
-			d := dialog.NewCustomConfirm(
-				"Pool Cleanup Required",
-				fmt.Sprintf("Remove %d Bad Proxies", removed),
-				"Keep All",
-				scroll,
-				func(remove bool) {
-					if !remove {
-						statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
-							st.pool.ValidCount(), st.pool.FailedCount(), total))
-						return
-					}
-					// Keep: fastest per duplicate group + verified unique egress only
-					// Drop: slower duplicates, unknown-egress proxies
-					keepSet := make(map[string]bool)
-					for _, g := range dupeGroups {
-						keepSet[g.proxies[0].Address()] = true // fastest only
-					}
-					var kept []*proxy.Proxy
-					for _, px := range valid {
-						if px.EgressIP == "" {
-							continue // unverified egress: cut
-						} else if len(byEgress[px.EgressIP]) == 1 {
-							kept = append(kept, px) // unique egress: keep
-						} else if keepSet[px.Address()] {
-							kept = append(kept, px) // fastest in dupe group: keep
+			fyne.Do(func() {
+				d := dialog.NewCustomConfirm(
+					"Pool Cleanup Required",
+					fmt.Sprintf("Remove %d Bad Proxies", removed),
+					"Keep All",
+					scroll,
+					func(remove bool) {
+						if !remove {
+							statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
+								st.pool.ValidCount(), st.pool.FailedCount(), total))
+							return
 						}
-						// slower duplicates: drop
-					}
-					st.pool.SetValid(kept)
-					st.validMu.Lock()
-					st.validRows = st.validRows[:0]
-					for _, px := range kept {
-						st.validRows = append(st.validRows, px.DisplayValid())
-					}
-					st.validMu.Unlock()
-					validList.Refresh()
-					refreshCounts()
-					statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d  (%d removed)",
-						st.pool.ValidCount(), st.pool.FailedCount(), total, removed))
-				},
-				w,
-			)
-			d.Resize(fyne.NewSize(620, 480))
-			d.Show()
+						// Keep: fastest per duplicate group + verified unique egress only
+						// Drop: slower duplicates, unknown-egress proxies
+						keepSet := make(map[string]bool)
+						for _, g := range dupeGroups {
+							keepSet[g.proxies[0].Address()] = true // fastest only
+						}
+						var kept []*proxy.Proxy
+						for _, px := range valid {
+							if px.EgressIP == "" {
+								continue // unverified egress: cut
+							} else if len(byEgress[px.EgressIP]) == 1 {
+								kept = append(kept, px) // unique egress: keep
+							} else if keepSet[px.Address()] {
+								kept = append(kept, px) // fastest in dupe group: keep
+							}
+							// slower duplicates: drop
+						}
+						st.pool.SetValid(kept)
+						st.validMu.Lock()
+						st.validRows = st.validRows[:0]
+						for _, px := range kept {
+							st.validRows = append(st.validRows, px.DisplayValid())
+						}
+						st.validMu.Unlock()
+						validList.Refresh()
+						refreshCounts()
+						statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d  (%d removed)",
+							st.pool.ValidCount(), st.pool.FailedCount(), total, removed))
+					},
+					w,
+				)
+				d.Resize(fyne.NewSize(620, 480))
+				d.Show()
+			})
 		}()
 	})
 
@@ -995,32 +1007,36 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 	logScroll := container.NewVScroll(logRich)
 
 	var logMu sync.Mutex
+	// appendLog is called from scan worker goroutines, so all widget mutation
+	// runs through fyne.Do (Fyne 2.6+ requires UI updates on the main thread).
 	appendLog := func(line string) {
-		logMu.Lock()
-		defer logMu.Unlock()
-		cur, _ := logBind.Get()
-		logBind.Set(cur + line)
+		fyne.Do(func() {
+			logMu.Lock()
+			defer logMu.Unlock()
+			cur, _ := logBind.Get()
+			logBind.Set(cur + line)
 
-		text := strings.TrimRight(line, "\n")
-		trimmed := strings.TrimSpace(text)
-		style := widget.RichTextStyle{TextStyle: fyne.TextStyle{Monospace: true}}
-		switch {
-		case strings.Contains(text, "► OPEN"):
-			style.ColorName = theme.ColorNameForeground
-			style.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
-			text = "❗ " + text
-		case strings.HasPrefix(trimmed, "[-]"):
-			style.ColorName = theme.ColorNameError
-		case strings.HasPrefix(trimmed, "[!]"):
-			style.ColorName = theme.ColorNameWarning
-		case strings.HasPrefix(trimmed, "[+]"), strings.HasPrefix(trimmed, "[=]"):
-			style.ColorName = theme.ColorNameSuccess
-		case strings.HasPrefix(trimmed, "[*]"):
-			style.ColorName = theme.ColorNamePrimary
-		}
-		logRich.Segments = append(logRich.Segments, &widget.TextSegment{Text: text, Style: style})
-		logRich.Refresh()
-		logScroll.ScrollToBottom()
+			text := strings.TrimRight(line, "\n")
+			trimmed := strings.TrimSpace(text)
+			style := widget.RichTextStyle{TextStyle: fyne.TextStyle{Monospace: true}}
+			switch {
+			case strings.Contains(text, "► OPEN"):
+				style.ColorName = theme.ColorNameForeground
+				style.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
+				text = "❗ " + text
+			case strings.HasPrefix(trimmed, "[-]"):
+				style.ColorName = theme.ColorNameError
+			case strings.HasPrefix(trimmed, "[!]"):
+				style.ColorName = theme.ColorNameWarning
+			case strings.HasPrefix(trimmed, "[+]"), strings.HasPrefix(trimmed, "[=]"):
+				style.ColorName = theme.ColorNameSuccess
+			case strings.HasPrefix(trimmed, "[*]"):
+				style.ColorName = theme.ColorNamePrimary
+			}
+			logRich.Segments = append(logRich.Segments, &widget.TextSegment{Text: text, Style: style})
+			logRich.Refresh()
+			logScroll.ScrollToBottom()
+		})
 	}
 	clearLog := func() {
 		logMu.Lock()
@@ -1118,8 +1134,10 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 		go func() {
 			defer func() {
 				st.scanRunning.Store(false)
-				btnStart.Enable()
-				btnStop.Disable()
+				fyne.Do(func() {
+					btnStart.Enable()
+					btnStop.Disable()
+				})
 				activeProxyBind.Set("—")
 				cancel()
 			}()
@@ -1819,12 +1837,16 @@ func buildHostsTab(st *state) fyne.CanvasObject {
 		showPortDetail(int(id), -1)
 	}
 
+	// hostsRefresh is invoked from scan worker goroutines (via pushFindings),
+	// so all widget updates run on the main thread via fyne.Do.
 	st.hostsRefresh = func() {
-		hostList.Refresh()
-		portList.Refresh()
-		if hi := int(selHost.Load()); hi >= 0 {
-			showPortDetail(hi, int(selPort.Load()))
-		}
+		fyne.Do(func() {
+			hostList.Refresh()
+			portList.Refresh()
+			if hi := int(selHost.Load()); hi >= 0 {
+				showPortDetail(hi, int(selPort.Load()))
+			}
+		})
 	}
 	showPortDetail(-1, -1)
 

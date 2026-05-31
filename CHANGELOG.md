@@ -4,6 +4,33 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [v1.4.1] — 2026-05-31
+
+Maintenance release: dependency and toolchain updates, plus the GUI fixes the
+Fyne upgrade required.
+
+### Changed
+- **Dependencies updated** — `fyne.io/fyne/v2` v2.4.4 → v2.7.4,
+  `golang.org/x/net` v0.24.0 → v0.55.0, and the rest of the module graph brought
+  current via `go mod tidy`.
+- **Go toolchain** — minimum raised to 1.25 (required by the updated
+  `golang.org/x/net` / `x/sys` / `x/text`).
+- **CI / release workflows** — bumped actions (`checkout` v6, `setup-go` v6,
+  `upload-artifact` v7, `download-artifact` v8, `action-gh-release` v3) and they
+  now read the Go version from `go.mod` so it can't drift again. Clears the
+  Node 20 deprecation warnings.
+- Migrated off the deprecated `theme.DarkTheme()` to a variant-based forced-dark
+  theme (same appearance).
+
+### Fixed
+- **GUI no longer freezes or crashes on Validate or scan** — Fyne 2.6+ made the
+  UI single-threaded; all widget updates from worker goroutines (validation,
+  scan log, Hosts refresh, auto-revalidation, the pool-cleanup dialog) now run on
+  the main thread via `fyne.Do()`. (Binding updates were already main-thread-safe
+  and were left as-is.)
+
+---
+
 ## [v1.4.0] — 2026-05-30
 
 ### Added
