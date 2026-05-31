@@ -21,7 +21,7 @@ func TestExtractPublicIP(t *testing.T) {
 		{"1.2.3.4", "1.2.3.4"},
 		{"98.97.37.167", "98.97.37.167"},
 		{"203.0.113.55", "203.0.113.55"},
-		// private / reserved — must be skipped
+		// private / reserved - must be skipped
 		{"10.0.0.1", ""},
 		{"10.255.255.255", ""},
 		{"172.16.0.1", ""},
@@ -32,7 +32,7 @@ func TestExtractPublicIP(t *testing.T) {
 		{"0.0.0.1", ""},
 		// public IP buried in HTML prose (portquiz.net style)
 		{"<p>Your public IP is 203.0.113.55 today.</p>", "203.0.113.55"},
-		// private IP first, public second — public wins
+		// private IP first, public second - public wins
 		{"from 192.168.1.1 and also 5.5.5.5", "5.5.5.5"},
 		// empty / no IP at all
 		{"no ip here", ""},
@@ -237,7 +237,7 @@ func serveMockSOCKS4(client net.Conn) {
 }
 
 // startAcceptServer binds a random localhost port, accepts connections, and
-// closes them immediately — simulates an open port.
+// closes them immediately - simulates an open port.
 func startAcceptServer(t *testing.T) (host string, port int, stop func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -367,7 +367,7 @@ func TestSocks4HandshakeIPv6FailsGracefully(t *testing.T) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	// "::1" is pure IPv6 — To4() returns nil, so socks4Handshake must fail cleanly.
+	// "::1" is pure IPv6 - To4() returns nil, so socks4Handshake must fail cleanly.
 	ok, errStr := socks4Handshake(conn, "::1", targetPort)
 	if ok {
 		t.Error("socks4Handshake with IPv6 address should fail")
@@ -408,7 +408,7 @@ func TestDialThroughProxySOCKS4(t *testing.T) {
 }
 
 func TestDialThroughProxyUnreachableProxy(t *testing.T) {
-	// nothing listens on port 1 — connection should be refused immediately
+	// nothing listens on port 1 - connection should be refused immediately
 	p := &Proxy{Host: "127.0.0.1", Port: 1, Proto: "socks5"}
 	_, err := DialThroughProxy(p, "127.0.0.1", 80, 500*time.Millisecond)
 	if err == nil {

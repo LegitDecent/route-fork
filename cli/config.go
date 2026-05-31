@@ -52,7 +52,7 @@ func SaveConfig(m map[string]string) error {
 	}
 	defer f.Close()
 	w := bufio.NewWriter(f)
-	fmt.Fprintln(w, "# rofk configuration — do not edit manually while the app is running")
+	fmt.Fprintln(w, "# rofk configuration - do not edit manually while the app is running")
 	for k, v := range m {
 		fmt.Fprintf(w, "%s = %s\n", k, v)
 	}

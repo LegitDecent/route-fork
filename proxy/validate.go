@@ -35,7 +35,7 @@ func DialThroughProxy(p *Proxy, host string, port int, timeout time.Duration) (n
 // returns the outbound IP the target actually sees. On success p.EgressIP is
 // populated.
 //
-// portquiz.net is tried first on port 8080 — this catches proxies that route
+// portquiz.net is tried first on port 8080 - this catches proxies that route
 // port 80 traffic direct (giving a false egress equal to the entry IP) while
 // tunnelling everything else through an upstream. Falling back to port-80
 // services covers proxies that block portquiz.net.
@@ -45,7 +45,7 @@ func FetchEgressIP(p *Proxy, timeout time.Duration) (string, error) {
 		port int
 	}
 	services := []svc{
-		{"portquiz.net", 8080}, // non-80 — same routing path as scan traffic
+		{"portquiz.net", 8080}, // non-80 - same routing path as scan traffic
 		{"api.ipify.org", 80},
 		{"checkip.amazonaws.com", 80},
 	}
@@ -263,7 +263,7 @@ func socks4Handshake(conn net.Conn, host string, port int) (bool, string) {
 // isn't behaving like a SOCKS server, counts as a proxy error. A closed port
 // ("connection refused"), an unreachable/filtered target, a SOCKS4 rejection,
 // or a missing CONNECT response (target dropping packets) are all treated as
-// genuine results — so a closed/filtered target never churns or prunes the pool.
+// genuine results - so a closed/filtered target never churns or prunes the pool.
 func IsProxyError(proxyAddr string, err error) bool {
 	if err == nil {
 		return false
@@ -279,7 +279,7 @@ func IsProxyError(proxyAddr string, err error) bool {
 	// real SOCKS server, auth problem, or it reset/closed the connection /
 	// never returned a CONNECT reply. Over SOCKS we never touch the target
 	// directly, so a reset/EOF/no-reply on our proxy socket is the PROXY's
-	// fault — not evidence the target port is closed. A genuinely closed port
+	// fault - not evidence the target port is closed. A genuinely closed port
 	// comes back as a proper SOCKS "connection refused" (handled below).
 	for _, sig := range []string{
 		"not a socks5 server",
@@ -293,7 +293,7 @@ func IsProxyError(proxyAddr string, err error) bool {
 			return true
 		}
 	}
-	// Everything else is a real target-side result — the proxy worked:
+	// Everything else is a real target-side result - the proxy worked:
 	// "connection refused" (port closed), "host/network unreachable",
 	// SOCKS4 "request rejected". Report as-is, don't retry.
 	return false

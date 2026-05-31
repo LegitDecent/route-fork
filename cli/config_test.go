@@ -40,7 +40,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 
 func TestLoadConfigMissingFile(t *testing.T) {
 	redirectHome(t)
-	// No file written — should return empty map, not error
+	// No file written - should return empty map, not error
 	got := LoadConfig()
 	if len(got) != 0 {
 		t.Errorf("LoadConfig with no file: got %v, want empty map", got)
@@ -128,7 +128,7 @@ func TestFindNmapFromConfig(t *testing.T) {
 
 	_ = SetConfigKey("nmap_path", fakeNmap)
 
-	path, found := FindNmap("") // no custom path — should pick up from config
+	path, found := FindNmap("") // no custom path - should pick up from config
 	if !found {
 		t.Errorf("FindNmap from config: found=false, path=%q", path)
 	}

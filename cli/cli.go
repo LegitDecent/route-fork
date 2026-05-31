@@ -50,7 +50,7 @@ Scan flags:
   -rotate         Rotate proxy after each target (default: true)
   -wrap           Wrap pool when exhausted (default: true)
 
-nmap is routed through a local SOCKS4->SOCKS5 relay — no proxychains needed.
+nmap is routed through a local SOCKS4->SOCKS5 relay, no proxychains needed.
 nmap must be installed: brew install nmap  /  apt install nmap  /  winget install nmap
 `
 
@@ -79,10 +79,10 @@ func RunScan(args []string) { runScan(args) }
 
 func runValidate(args []string) {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
-	inFile   := fs.String("f", "", "input proxy file (default stdin)")
-	outFile  := fs.String("o", "", "output valid proxies (default stdout)")
-	threads  := fs.Int("t", 100, "concurrent threads")
-	timeout  := fs.Float64("T", 10, "timeout seconds")
+	inFile := fs.String("f", "", "input proxy file (default stdin)")
+	outFile := fs.String("o", "", "output valid proxies (default stdout)")
+	threads := fs.Int("t", 100, "concurrent threads")
+	timeout := fs.Float64("T", 10, "timeout seconds")
 	testHost := fs.String("H", "www.google.com", "test host")
 	testPort := fs.Int("P", 80, "test port")
 	fs.Parse(args)
@@ -158,7 +158,7 @@ func printEgressSummary(proxies []*proxy.Proxy) {
 	}
 
 	if unknownCount > 0 {
-		fmt.Fprintf(os.Stderr, "[!] %d proxy/proxies had no verifiable egress IP — exit node unknown, untrustworthy. Remove them.\n", unknownCount)
+		fmt.Fprintf(os.Stderr, "[!] %d proxy/proxies had no verifiable egress IP. Exit node unknown, untrustworthy. Remove them.\n", unknownCount)
 	}
 
 	if len(byEgress) > 0 {
@@ -175,11 +175,11 @@ func printEgressSummary(proxies []*proxy.Proxy) {
 		return
 	}
 	sort.Strings(dupeIPs)
-	fmt.Fprintf(os.Stderr, "[!] %d egress IP(s) shared by multiple proxies — these are redundant:\n", len(dupeIPs))
+	fmt.Fprintf(os.Stderr, "[!] %d egress IP(s) shared by multiple proxies. These are redundant:\n", len(dupeIPs))
 	for _, ip := range dupeIPs {
 		fmt.Fprintf(os.Stderr, "    %s  (%d proxies)\n", ip, byEgress[ip])
 	}
-	fmt.Fprintln(os.Stderr, "[!] Remove duplicates — they provide no additional anonymity.")
+	fmt.Fprintln(os.Stderr, "[!] Remove duplicates. They provide no additional anonymity.")
 }
 
 // ── scan ──────────────────────────────────────────────────────────────────────
@@ -187,14 +187,14 @@ func printEgressSummary(proxies []*proxy.Proxy) {
 func runScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	poolFile := fs.String("pool", "", "proxy pool file (required)")
-	target   := fs.String("target", "", "target host/IP (required)")
-	ports    := fs.String("ports", "1-65535", "port spec")
-	tool     := fs.String("tool", "builtin", "builtin | nmap")
-	conc     := fs.Int("conc", 200, "concurrent dials (builtin only)")
-	timeout  := fs.Float64("T", 5, "timeout seconds")
-	extra    := fs.String("extra", "", "extra nmap args")
-	rotate   := fs.Bool("rotate", true, "rotate proxy per scan")
-	wrap     := fs.Bool("wrap", true, "wrap pool when exhausted")
+	target := fs.String("target", "", "target host/IP (required)")
+	ports := fs.String("ports", "1-65535", "port spec")
+	tool := fs.String("tool", "builtin", "builtin | nmap")
+	conc := fs.Int("conc", 200, "concurrent dials (builtin only)")
+	timeout := fs.Float64("T", 5, "timeout seconds")
+	extra := fs.String("extra", "", "extra nmap args")
+	rotate := fs.Bool("rotate", true, "rotate proxy per scan")
+	wrap := fs.Bool("wrap", true, "wrap pool when exhausted")
 	fs.Parse(args)
 
 	if *poolFile == "" || *target == "" {
@@ -264,7 +264,7 @@ func runBuiltin(ctx context.Context, px *proxy.Proxy, target, ports string,
 			fmt.Printf("%s:%d\n", r.Host, r.Port)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n[+] Done — %d open ports\n", open)
+	fmt.Fprintf(os.Stderr, "\n[+] Done: %d open ports\n", open)
 }
 
 const commonPortSpec = "21,22,23,25,53,80,110,111,135,139,143,443,445,993,995," +

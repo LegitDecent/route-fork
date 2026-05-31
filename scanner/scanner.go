@@ -248,7 +248,7 @@ func buildDialer(p *proxy.Proxy, timeout time.Duration) (xproxy.Dialer, error) {
 		base := &net.Dialer{Timeout: timeout}
 		return xproxy.SOCKS5("tcp", proxyAddr, auth, base)
 	}
-	// SOCKS4 — implement our own dialer since x/net/proxy doesn't export one
+	// SOCKS4 - implement our own dialer since x/net/proxy doesn't export one
 	return &socks4Dialer{addr: proxyAddr, timeout: timeout}, nil
 }
 

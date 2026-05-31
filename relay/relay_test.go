@@ -393,7 +393,7 @@ func TestSocks4aConnectHostname(t *testing.T) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	// Use "localhost" — mock resolves it via DNS
+	// Use "localhost" - mock resolves it via DNS
 	if err := socks4aConnect(conn, "localhost", targetPort); err != nil {
 		t.Errorf("socks4aConnect(localhost): %v", err)
 	}
@@ -493,7 +493,7 @@ func TestRelayForwardSOCKS5Upstream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// dialSOCKS4 verifies the 0x5A reply internally — if it returns, the relay succeeded
+	// dialSOCKS4 verifies the 0x5A reply internally - if it returns, the relay succeeded
 	conn := dialSOCKS4(t, relayAddr, targetHost, targetPort)
 	conn.Close()
 }
@@ -560,10 +560,10 @@ func TestRelayDataFlowEndToEnd(t *testing.T) {
 	}
 }
 
-// ── relay failure — no 0x5B ───────────────────────────────────────────────────
+// ── relay failure - no 0x5B ───────────────────────────────────────────────────
 
 func TestRelayFailureNoRejectionCode(t *testing.T) {
-	// Point relay at a dead upstream — nothing on port 1
+	// Point relay at a dead upstream - nothing on port 1
 	px := &proxy.Proxy{Host: "127.0.0.1", Port: 1, Proto: "socks5"}
 	relay, relayAddr, err := Start(px, 300*time.Millisecond)
 	if err != nil {
@@ -586,9 +586,9 @@ func TestRelayFailureNoRejectionCode(t *testing.T) {
 	resp := make([]byte, 8)
 	n, err := io.ReadFull(conn, resp)
 	if err == nil && n == 8 {
-		// Got a full 8-byte response — verify it's not a SOCKS4 rejection
+		// Got a full 8-byte response - verify it's not a SOCKS4 rejection
 		if resp[1] == 0x5B {
-			t.Error("relay sent 0x5B rejection — should send bare TCP close instead")
+			t.Error("relay sent 0x5B rejection - should send bare TCP close instead")
 		}
 	}
 	// Getting an error (EOF/reset) is the expected behavior

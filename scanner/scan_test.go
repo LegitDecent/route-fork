@@ -216,7 +216,7 @@ func TestScanProxyPopulated(t *testing.T) {
 	<-done
 
 	if len(found) == 0 {
-		t.Fatal("no results — cannot check Proxy field")
+		t.Fatal("no results - cannot check Proxy field")
 	}
 	if found[0].Proxy == nil {
 		t.Error("Result.Proxy is nil; should carry the proxy that opened the connection")
@@ -262,7 +262,7 @@ func TestScanProgressCallback(t *testing.T) {
 	proxyAddr, stopProxy := startMockSOCKS5(t)
 	defer stopProxy()
 
-	// scan a small fixed port range (no target listening — that's OK, progress fires regardless)
+	// scan a small fixed port range (no target listening - that's OK, progress fires regardless)
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
 	ln.Close()

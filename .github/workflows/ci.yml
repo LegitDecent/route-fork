@@ -24,3 +24,19 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+  vuln:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # govulncheck only flags vulnerabilities whose affected functions are
+      # actually reachable from our code, so it stays low-noise.
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

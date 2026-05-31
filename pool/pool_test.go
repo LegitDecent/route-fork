@@ -217,7 +217,7 @@ func TestSetValidResetsIndex(t *testing.T) {
 
 	got := p.Next(false)
 	if got == nil {
-		t.Error("after SetValid: Next returned nil — index was not reset")
+		t.Error("after SetValid: Next returned nil - index was not reset")
 	}
 }
 
@@ -246,6 +246,6 @@ func TestSetValidIsolation(t *testing.T) {
 		t.Fatal("pool is empty after SetValid")
 	}
 	if snap[0].Host != "1.1.1.1" {
-		t.Errorf("SetValid did not copy slice — pool shows %q after source mutation", snap[0].Host)
+		t.Errorf("SetValid did not copy slice - pool shows %q after source mutation", snap[0].Host)
 	}
 }

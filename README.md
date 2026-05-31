@@ -23,6 +23,8 @@ Routes nmap (or its own built-in TCP scanner) through rotating proxy pools, no p
 - **Built-in TCP scanner** — pure Go, zero dependencies, works when nmap isn't available
 - **Self-healing pool** — dead proxies are retried-past and pruned mid-scan; optional
   auto-revalidation re-checks the pool on an interval
+- **Proxy burn protection** (opt-in) — paces reuse of each proxy so a free SOCKS pool
+  isn't hammered into rate-limits or bans mid-scan (protects *your* infrastructure)
 - **Output formats** — txt, json, xml, csv (CLI `-out -` streams to stdout for piping)
 
 ---
@@ -130,7 +132,7 @@ rofk
 ```
 
 **Proxies tab** — paste or import proxy lists, validate concurrently, export live proxies.  
-**Scanner tab** — configure target, ports (with an "add common ports" toggle), timing presets (T3/T4/T5), and **Scan mode** (Fast/Confirmed/Paranoid open-port confirmation), with a real-time log.  
+**Scanner tab** — configure target, ports (with an "add common ports" toggle), timing presets (T3/T4/T5), **Scan mode** (Fast/Confirmed/Paranoid open-port confirmation), and optional **proxy burn protection** (per-proxy reuse gap), with a real-time log.  
 **Hosts tab** — Zenmap-style three-pane drill-down: pick a host → see its deduplicated open ports → click a port to list every proxy that validated it, with service, version, and banner.  
 **Settings tab** — nmap path detection, validation settings, and auto-revalidation interval.
 
@@ -171,8 +173,13 @@ go test ./...
 Tests cover the SOCKS4/5 handshake and proxy-dial logic, the local relay
 (forward path, SOCKS4a hostname handling, failure behaviour), the port
 scanner (open/closed ports, per-connection proxy tracking, context
-cancellation), and pool management. All tests use local mock servers — no
-external network required.
+cancellation), the quorum decision and burn-protection throttle, the proxy
+error classifier, and pool management. All tests use local mock servers and
+need no external network access.
+
+CI also runs [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck)
+on every push and pull request, so known vulnerabilities in dependencies are
+caught automatically.
 
 ---
 

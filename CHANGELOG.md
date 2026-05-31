@@ -4,6 +4,30 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [v1.4.2] — 2026-05-31
+
+### Security
+- **Patched two DoS vulnerabilities** in `golang.org/x/image`'s TIFF decoder
+  (GO-2026-5032, GO-2026-4815), pulled in transitively by the GUI's image
+  rendering. Bumped `golang.org/x/image` v0.24.0 → v0.41.0. Found by `govulncheck`.
+- **CI now runs `govulncheck`** on every push and pull request, so reachable
+  vulnerabilities in dependencies are caught automatically.
+
+### Added
+- **Proxy burn protection** (off by default) — an optional per-proxy minimum
+  reuse interval on the Scanner tab. When enabled, a proxy used within the gap is
+  skipped for that round, so a free SOCKS pool isn't hammered into rate-limits or
+  bans mid-scan. This protects your own proxy infrastructure; it is not a
+  target-evasion feature.
+
+### Changed
+- The per-port quorum decision (open / closed / unconfirmed / unreachable,
+  including the "an authoritative refusal overrides a met quorum" rule) was
+  extracted from the GUI into a pure, unit-tested `scanner.DecideQuorum` function.
+  No behaviour change; it's the same logic, now covered by tests.
+
+---
+
 ## [v1.4.1] — 2026-05-31
 
 Maintenance release: dependency and toolchain updates, plus the GUI fixes the
@@ -72,8 +96,8 @@ Fyne upgrade required.
   since host discovery does not work through SOCKS proxies.
 - **Release builds cover five platforms** — `linux/amd64`, `linux/arm64`, macOS
   Apple Silicon (`macos-arm64`) and Intel (`macos-amd64`), and `windows/amd64`.
-  Intel Macs now have a native binary (an arm64-only build can't run on them —
-  Rosetta 2 only translates x86_64 → arm64).
+  Intel Macs now have a native binary (an arm64-only build can't run on them;
+  Rosetta 2 only translates x86_64 to arm64).
 - **Hosts tab deduplicates ports across rescans** — re-scanning a port no longer
   adds a duplicate row; newly-validating proxies are merged into the existing port
   entry, and the per-host count reflects distinct ports.

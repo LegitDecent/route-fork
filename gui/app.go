@@ -225,7 +225,7 @@ func (st *state) pushFindings(findings []Finding) {
 		}
 
 		if pi, exists := hr.portIdx[key]; exists {
-			// Rescan of a known port — merge in any new proxies, dedup.
+			// Rescan of a known port - merge in any new proxies, dedup.
 			pe := hr.Ports[pi]
 			pe.Proxies = dedupeAppend(pe.Proxies, provs)
 			if pe.Service == "" {
@@ -303,7 +303,7 @@ func Run() {
 func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 	// ── Input ──
 	inputEntry := widget.NewMultiLineEntry()
-	inputEntry.SetPlaceHolder("Paste proxies here — one per line\n\nFormats:\n  host:port\n  socks5://host:port\n  socks4://host:port\n  socks5://user:pass@host:port\n  host:port:user:pass")
+	inputEntry.SetPlaceHolder("Paste proxies here, one per line\n\nFormats:\n  host:port\n  socks5://host:port\n  socks4://host:port\n  socks5://user:pass@host:port\n  host:port:user:pass")
 	inputEntry.Wrapping = fyne.TextWrapOff
 
 	// ── Progress / status bindings ──
@@ -409,7 +409,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 			len(proxies),
 		)
 
-		dialog.ShowConfirm("Skip Validation — Are You Sure?", msg, func(confirmed bool) {
+		dialog.ShowConfirm("Skip Validation: Are You Sure?", msg, func(confirmed bool) {
 			if !confirmed {
 				return
 			}
@@ -474,7 +474,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 				select {
 				case <-ctx.Done():
 					wg.Wait()
-					statusBind.Set(fmt.Sprintf("Stopped — Valid: %d  Failed: %d",
+					statusBind.Set(fmt.Sprintf("Stopped. Valid: %d  Failed: %d",
 						st.pool.ValidCount(), st.pool.FailedCount()))
 					return
 				default:
@@ -552,7 +552,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 			}
 
 			if len(dupeGroups) == 0 && unknownCount == 0 {
-				statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
+				statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d",
 					st.pool.ValidCount(), st.pool.FailedCount(), total))
 				return
 			}
@@ -562,7 +562,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 
 			if len(dupeGroups) > 0 {
 				lines = append(lines, widget.NewLabelWithStyle(
-					fmt.Sprintf("%d duplicate egress IP(s) — %d redundant proxies share an exit IP with a faster one.",
+					fmt.Sprintf("%d duplicate egress IP(s). %d redundant proxies share an exit IP with a faster one.",
 						len(dupeGroups), totalDupes),
 					fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
 				))
@@ -587,7 +587,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 			if unknownCount > 0 {
 				lines = append(lines, widget.NewSeparator())
 				lines = append(lines, widget.NewLabelWithStyle(
-					fmt.Sprintf("%d proxy/proxies could not have their egress IP verified — exit node unknown, untrustworthy.",
+					fmt.Sprintf("%d proxy/proxies could not have their egress IP verified. Exit node unknown, untrustworthy.",
 						unknownCount),
 					fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
 				))
@@ -612,7 +612,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 					scroll,
 					func(remove bool) {
 						if !remove {
-							statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d",
+							statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d",
 								st.pool.ValidCount(), st.pool.FailedCount(), total))
 							return
 						}
@@ -642,7 +642,7 @@ func buildProxiesTab(w fyne.Window, st *state, a fyne.App) fyne.CanvasObject {
 						st.validMu.Unlock()
 						validList.Refresh()
 						refreshCounts()
-						statusBind.Set(fmt.Sprintf("Done — Valid: %d  Failed: %d  Total: %d  (%d removed)",
+						statusBind.Set(fmt.Sprintf("Done. Valid: %d  Failed: %d  Total: %d  (%d removed)",
 							st.pool.ValidCount(), st.pool.FailedCount(), total, removed))
 					},
 					w,
@@ -932,9 +932,9 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 	// reported. Guards against lying proxies that fake a successful CONNECT.
 	// Only applies to per-port rotation (built-in TCP scan).
 	verifyBlurbs := map[string]string{
-		"Fast (1 proxy)":        "Fastest. First proxy that connects decides — a lying proxy can report a false open.",
-		"Confirmed (2 proxies)": "Recommended. Two independent proxies must agree before a port is reported open — kills single-liar false positives.",
-		"Paranoid (3 proxies)":  "Strongest. Three proxies must agree — beats multiple liars, but slower and may miss opens on small/flaky pools.",
+		"Fast (1 proxy)":        "Fastest. First proxy that connects decides. A lying proxy can report a false open.",
+		"Confirmed (2 proxies)": "Recommended. Two independent proxies must agree before a port is reported open, stopping single-liar false positives.",
+		"Paranoid (3 proxies)":  "Strongest. Three proxies must agree, beating multiple liars, but slower and may miss opens on small or flaky pools.",
 	}
 	verifyBlurb := widget.NewLabel(verifyBlurbs["Confirmed (2 proxies)"])
 	verifyBlurb.Wrapping = fyne.TextWrapWord
@@ -943,6 +943,38 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 		func(s string) { verifyBlurb.SetText(verifyBlurbs[s]) },
 	)
 	verifySelect.Selected = "Confirmed (2 proxies)"
+
+	// Proxy burn protection (off by default): spaces out reuse of each proxy so
+	// a free SOCKS pool isn't hammered into rate-limits/bans mid-scan. This
+	// protects your own proxies. It is not a target-evasion feature.
+	burnCheck := widget.NewCheck("Proxy burn protection", nil)
+	burnIntervalEntry := widget.NewEntry()
+	burnIntervalEntry.SetText("2")
+	burnIntervalEntry.SetPlaceHolder("sec")
+	// (i) info button explains the small-pool trade-off on click.
+	const smallPoolThreshold = 50
+	burnInfoBtn := widget.NewButtonWithIcon("", theme.InfoIcon(), func() {
+		n := st.pool.ValidCount()
+		msg := "Proxy burn protection spaces out reuse of each proxy so a free SOCKS\n" +
+			"pool isn't hammered into rate-limits or bans during a scan. It protects\n" +
+			"your own proxies. It does not evade the target.\n\n" +
+			"Works best with large pools.\n" +
+			"Each port needs a few freshly-rested proxies per round. With a small\n" +
+			"pool, ports run out of rested proxies and report \"unconfirmed\" (treated\n" +
+			"as closed) sooner, so you can miss genuinely open ports.\n\n" +
+			fmt.Sprintf("Rule of thumb: only enable this with a comfortably large pool\n"+
+				"(roughly %d+ proxies). Below that, leave it off.\n\n", smallPoolThreshold)
+		if n < smallPoolThreshold {
+			msg += fmt.Sprintf("Warning: your pool has only %d valid proxy/proxies, which is small.\n"+
+				"Burn protection may cause false negatives. Recommended: leave it off.", n)
+		} else {
+			msg += fmt.Sprintf("Your pool has %d valid proxies, large enough to use this safely.", n)
+		}
+		dialog.ShowInformation("Proxy burn protection", msg, w)
+	})
+	burnInfoBtn.Importance = widget.LowImportance
+	burnRow := container.NewBorder(nil, nil, burnCheck,
+		container.NewHBox(widget.NewLabel("min gap/proxy:"), burnIntervalEntry, widget.NewLabel("s"), burnInfoBtn), nil)
 
 	configForm := container.New(layout.NewFormLayout(),
 		widget.NewLabel("Tool:"), toolSelect,
@@ -954,6 +986,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 		widget.NewLabel("Concurrency:"), concEntry,
 		widget.NewLabel("Scan mode:"), verifySelect,
 		widget.NewLabel(""), verifyBlurb,
+		widget.NewLabel("Burn protect:"), burnRow,
 		widget.NewLabel("Extra args:"), extraEntry,
 		widget.NewLabel("Custom cmd:"), customEntry,
 	)
@@ -1055,7 +1088,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			parts = append(parts, "-T4")
 		case "Insane (T5)":
 			parts = append(parts, "-T5")
-			// Default (T3) needs no flag — it's nmap's built-in default
+			// Default (T3) needs no flag - it's nmap's built-in default
 		}
 		if v := strings.TrimSpace(minRateEntry.Text); v != "" {
 			parts = append(parts, "--min-rate", v)
@@ -1145,7 +1178,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			// Resolve nmap binary once per scan session
 			nmapBin, nmapOK := cli.FindNmap("")
 			if !nmapOK && toolSelect.Selected == "nmap" {
-				appendLog("[!] nmap not found — check Settings tab to configure path\n")
+				appendLog("[!] nmap not found. Check Settings tab to configure path\n")
 				appendLog("    (will still attempt: " + nmapBin + ")\n")
 			}
 
@@ -1169,7 +1202,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 
 				px := st.pool.Next(wrap)
 				if px == nil {
-					appendLog("[-] Proxy pool exhausted — stopping\n")
+					appendLog("[-] Proxy pool exhausted, stopping\n")
 					return
 				}
 				activeProxyBind.Set(px.Address())
@@ -1184,7 +1217,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				case "Built-in (TCP connect)", "nmap":
 					// Proxy-pool TCP scan governed by Scan mode (Fast/Confirmed/
 					// Paranoid = 1/2/3 proxies must agree a port is open). Applies
-					// regardless of any rotation checkbox — Scan mode is the authority.
+					// regardless of any rotation checkbox - Scan mode is the authority.
 					snap := st.pool.Valid()
 					n := len(snap)
 					if n == 0 {
@@ -1223,9 +1256,9 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 							open, hostDown, chunkF := execNmapParsed(ctx, cmd, proxyX.URI(), appendLog)
 							if open == 0 {
 								if hostDown {
-									appendLog(fmt.Sprintf("[!] Chunk %d/%d: hosts seem down — retrying with -Pn\n", idx, n))
+									appendLog(fmt.Sprintf("[!] Chunk %d/%d: hosts seem down, retrying with -Pn\n", idx, n))
 								} else {
-									appendLog(fmt.Sprintf("[!] Chunk %d/%d: 0 open — retrying with -Pn\n", idx, n))
+									appendLog(fmt.Sprintf("[!] Chunk %d/%d: 0 open, retrying with -Pn\n", idx, n))
 								}
 								retryCmd := nmapCmd(nmapBin, chunkPorts, extras, pArg, chunkTarget, true)
 								appendLog("  CMD: " + strings.Join(retryCmd, " ") + "\n")
@@ -1293,7 +1326,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 								appendLog(fmt.Sprintf("[-] Port spec error: %v\n", parseErr))
 								break
 							}
-							// Both rotation paths use Go-native SOCKS5/SOCKS4 dial —
+							// Both rotation paths use Go-native SOCKS5/SOCKS4 dial,
 							// not nmap --proxies, which silently falls back to direct
 							// on macOS when the proxy rejects or times out.
 							if len(ports) <= n {
@@ -1318,6 +1351,18 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 								}
 								appendLog(fmt.Sprintf("[*] TCP rotate  %s  %d port(s) / %d proxies  1 port each  (need %d to agree open)  [parallel]\n",
 									target, len(ports), n, quorum))
+
+								// Optional proxy burn protection: skip any proxy used
+								// within the configured gap so the pool isn't hammered.
+								var throttle *scanner.ProxyThrottle
+								if burnCheck.Checked {
+									secs, _ := strconv.ParseFloat(strings.TrimSpace(burnIntervalEntry.Text), 64)
+									if secs <= 0 {
+										secs = 2
+									}
+									throttle = scanner.NewProxyThrottle(time.Duration(secs * float64(time.Second)))
+									appendLog(fmt.Sprintf("[*] Burn protection on, each proxy rested %.0fs between uses\n", secs))
+								}
 
 								// Shared dial-concurrency cap across all ports and their
 								// parallel confirmation batches.
@@ -1365,6 +1410,10 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 												p := shuffled[(startIdx+consumed)%poolSize]
 												consumed++
 												if isFailed(p) {
+													continue
+												}
+												// Burn protection: skip a proxy used too recently.
+												if !throttle.Ready(p.Address()) {
 													continue
 												}
 												batch = append(batch, p)
@@ -1439,15 +1488,16 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 											}
 										}
 
-										// Decide.
-										switch {
-										case refuted:
+										// Decide (pure verdict logic lives in scanner.DecideQuorum,
+										// which is unit-tested; here we just render each outcome).
+										switch scanner.DecideQuorum(confirmations, quorum, refuted) {
+										case scanner.QuorumRefuted:
 											if confirmations > 0 {
-												appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s) — closed\n", port, refutedBy, confirmations))
+												appendLog(fmt.Sprintf("[!] Port %d refuted: %s reports closed after %d open vote(s), treating as closed\n", port, refutedBy, confirmations))
 											} else {
 												appendLog(fmt.Sprintf("[!] Port %d closed/filtered (refused by %s)\n", port, refutedBy))
 											}
-										case confirmations >= quorum:
+										case scanner.QuorumOpen:
 											svc := scanner.PortService(port)
 											if svc == "" {
 												svc = "unknown"
@@ -1472,9 +1522,9 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 											findingsMu.Lock()
 											targetFindings = append(targetFindings, Finding{Host: target, Line: portLine, ProxyURI: primary, Proxies: openLabels, Banner: openBanner})
 											findingsMu.Unlock()
-										case confirmations > 0:
-											appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed) — treating as closed/filtered\n", port, confirmations, quorum))
-										default:
+										case scanner.QuorumUnconfirmed:
+											appendLog(fmt.Sprintf("[!] Port %d unconfirmed (%d/%d agreed), treating as closed/filtered\n", port, confirmations, quorum))
+										default: // scanner.QuorumUnreachable
 											appendLog(fmt.Sprintf("[!] Port %d: no proxy could reach it (target may be filtered)\n", port))
 										}
 									}(startIdx, port)
@@ -1633,7 +1683,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				}
 			}
 			appendLog("[=] ─────────────────────────────────────────────────\n")
-			appendLog(fmt.Sprintf("[=] All scans complete — %d targets processed\n", completed))
+			appendLog(fmt.Sprintf("[=] All scans complete, %d targets processed\n", completed))
 		}()
 	})
 
@@ -1919,7 +1969,7 @@ func buildSettingsTab(st *state) fyne.CanvasObject {
 		if found {
 			nmapStatusBind.Set("✓  Found: " + p)
 		} else {
-			nmapStatusBind.Set("✗  Not found — install nmap or set path below")
+			nmapStatusBind.Set("✗  Not found. Install nmap or set path below")
 		}
 	}
 	updateNmapStatus()

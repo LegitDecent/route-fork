@@ -4,7 +4,7 @@
 // We start a throwaway listener on 127.0.0.1:0, hand nmap
 // socks4://127.0.0.1:<port>, and forward every connection through
 // the actual SOCKS4 or SOCKS5 proxy in the pool.
-// Zero system dependencies — pure Go.
+// Zero system dependencies - pure Go.
 package relay
 
 import (
