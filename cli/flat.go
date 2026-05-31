@@ -61,7 +61,7 @@ var nmapValueFlags = map[string]bool{
 
 func parseFlatArgs(args []string) flatArgs {
 	fa := flatArgs{
-		tool:    "nmap",
+		tool:    "builtin",
 		conc:    200,
 		timeout: 5,
 		rotate:  true,
@@ -186,6 +186,17 @@ func RunFlatMode(args []string) {
 	if strings.ToLower(fa.tool) == "nmap" && !nmapFound {
 		fmt.Fprint(os.Stderr, nmapMissingMsg(fa.nmapPath))
 		os.Exit(1)
+	}
+	if strings.ToLower(fa.tool) == "nmap" {
+		for _, t := range fa.targets {
+			if strings.Contains(t, "/") {
+				fmt.Fprint(os.Stderr, "[!] WARNING: nmap on a CIDR runs real nmap through a SOCKS relay. "+
+					"nmap's --proxies can silently fall back to a DIRECT connection if a proxy fails, "+
+					"leaking this box's IP (your VPN exit, if any) to some targets. This is nmap behaviour, "+
+					"not rofk's. Use -tool builtin for leak-safe, always-proxied scanning.\n")
+				break
+			}
+		}
 	}
 
 	// load proxies
@@ -437,7 +448,7 @@ PROXY-MANAGER FLAGS
   -p <ports>           Port spec: "80,443"  "1-1024"  (forwarded to nmap too)
   -out <file>          Output file path; use "-" for stdout
   -type <fmt>          Output format: txt | json | xml | csv  (default: txt)
-  -tool <name>         Scanner: nmap | builtin  (default: nmap)
+  -tool <name>         Scanner: builtin | nmap  (default: builtin; nmap warns on CIDR)
   -conc <N>            Concurrency for builtin scanner  (default: 200)
   -timeout <sec>       Connect timeout  (default: 5)
   -rotate              Rotate proxy between targets  (default: on)

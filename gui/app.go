@@ -876,8 +876,8 @@ func dialThroughProxyCtx(ctx context.Context, p *proxy.Proxy, host string, port 
 // ── Scanner tab ───────────────────────────────────────────────────────────────
 
 func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
-	toolSelect := widget.NewSelect([]string{"nmap", "Built-in (TCP connect)", "custom"}, nil)
-	toolSelect.Selected = "nmap"
+	toolSelect := widget.NewSelect([]string{"Built-in (TCP connect)", "nmap", "custom"}, nil)
+	toolSelect.Selected = "Built-in (TCP connect)"
 
 	targetEntry := widget.NewEntry()
 	targetEntry.SetPlaceHolder("e.g. 192.168.1.1 or scanme.nmap.org")
@@ -1013,6 +1013,19 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			timingSelect.Enable()
 			minRateEntry.Enable()
 			maxRetriesEntry.Enable()
+			dialog.ShowInformation("Heads up: nmap and CIDR ranges",
+				"Single-host scans always run through the Go-native rotating scanner "+
+					"(every connection goes through a proxy), so this choice only matters "+
+					"for CIDR ranges.\n\n"+
+					"For a CIDR, the nmap tool runs real nmap through a local SOCKS relay. "+
+					"nmap's --proxies is known to silently FALL BACK TO A DIRECT connection "+
+					"if a proxy errors or times out. On a CIDR sweep that can leak your box's "+
+					"own IP (your VPN exit, if you're on one) to some targets, and the target "+
+					"sees one IP instead of the rotating pool.\n\n"+
+					"There is no way around this: it is nmap's behaviour, not rofk's.\n\n"+
+					"Use nmap only when you need version detection (-sV) or NSE scripts on a "+
+					"range. For leak-safe scanning, use the Built-in scanner, which is always "+
+					"proxied and never falls back to direct.", w)
 		default: // Built-in
 			customEntry.Disable()
 			extraEntry.Disable()
@@ -1022,6 +1035,10 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			maxRetriesEntry.Disable()
 		}
 	}
+	// Apply the enable/disable state for the default tool (Built-in). Setting
+	// .Selected directly does not fire OnChanged, and the default is not "nmap",
+	// so this initialises field states without showing the nmap warning.
+	toolSelect.OnChanged(toolSelect.Selected)
 	wrapCheck.SetChecked(true)
 
 	// ── Log ──

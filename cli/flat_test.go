@@ -16,8 +16,8 @@ func TestParseFlatArgsDefaults(t *testing.T) {
 	if len(fa.targets) != 1 || fa.targets[0] != "1.2.3.4" {
 		t.Errorf("targets = %v, want [1.2.3.4]", fa.targets)
 	}
-	if fa.tool != "nmap" {
-		t.Errorf("default tool = %q, want nmap", fa.tool)
+	if fa.tool != "builtin" {
+		t.Errorf("default tool = %q, want builtin", fa.tool)
 	}
 	if fa.timeout != 5 {
 		t.Errorf("default timeout = %v, want 5", fa.timeout)
