@@ -15,6 +15,28 @@ pools with no proxychains; nmap is available as an opt-in for CIDR ranges.
 
 ---
 
+## Intended use cases
+
+Route Fork is built for defenders and operators validating their own
+infrastructure and detection pipelines:
+
+- **Detection-coverage testing** — validate that your SIEM/IDS/firewall flags
+  scan-like traffic and proxy-routed access the way you expect.
+- **Egress-logging verification** — confirm approved proxy egress paths are
+  correctly logged and enriched downstream.
+- **Geo-IP / regional-access checks** — confirm geo-IP enrichment and regional
+  access behaviour for services you own (see the region-block checker).
+- **Blue-team telemetry** — generate controlled, authorized network telemetry
+  for blue-team exercises and detection tuning.
+- **Proxy-path troubleshooting** — diagnose reachability and weed out false
+  positives caused by unreliable proxies (quorum confirmation, dead-proxy
+  pruning).
+
+All of the above assume systems you own or are explicitly authorized to test.
+See [Legal](#legal).
+
+---
+
 ## Features
 
 - **GUI** — proxy validator, scanner, Zenmap-style Hosts tab with drill-down, real-time log
