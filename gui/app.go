@@ -1104,28 +1104,9 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			return
 		}
 
-		// Build target list
-		var targets []string
-		if queueEntry.Text != "" && queueEntry.Text != queueEntry.PlaceHolder {
-			for _, t := range strings.Split(queueEntry.Text, "\n") {
-				t = strings.TrimSpace(t)
-				if t != "" {
-					targets = append(targets, t)
-				}
-			}
-		}
-		if single := strings.TrimSpace(targetEntry.Text); single != "" {
-			found := false
-			for _, t := range targets {
-				if t == single {
-					found = true
-					break
-				}
-			}
-			if !found {
-				targets = append([]string{single}, targets...)
-			}
-		}
+		// Build target list (single first, then queue; deduped). Pure logic in
+		// buildTargetList, unit-tested in scansession_test.go.
+		targets := buildTargetList(targetEntry.Text, queueEntry.Text, queueEntry.PlaceHolder)
 		if len(targets) == 0 {
 			dialog.ShowInformation("No target", "Enter a target host or IP.", w)
 			return
@@ -1165,19 +1146,9 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			}
 
 			// Scan-mode quorum (built-in / Go-native path).
-			quorum := 1
-			switch verifySelect.Selected {
-			case "Confirmed (2 proxies)":
-				quorum = 2
-			case "Paranoid (3 proxies)":
-				quorum = 3
-			}
+			quorum := quorumForMode(verifySelect.Selected)
 
-			type hostResult struct {
-				host     string
-				findings []Finding
-			}
-			var scanResults []hostResult
+			var scanResults []hostScan
 			completed := 0
 			wrap := wrapCheck.Checked
 			rotate := rotateCheck.Checked
@@ -1185,13 +1156,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			// On a range / multi-target scan, a per-port closed/unreachable line
 			// would be thousands of log writes (one fyne.Do each) that freeze the
 			// UI and the Stop button. For those, log only OPEN ports.
-			quiet := len(targets) > 1
-			for _, t := range targets {
-				if strings.Contains(t, "/") {
-					quiet = true
-					break
-				}
-			}
+			quiet := quietScan(targets)
 			// logOutcome renders a quorum verdict (findings are accumulated by RunScan).
 			logOutcome := func(oc scanner.PortOutcome) {
 				if oc.Verdict == scanner.QuorumOpen {
@@ -1236,18 +1201,9 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			}
 			// toGui maps scanner findings to the GUI Finding type for the Hosts tab.
 			toGui := func(fs []scanner.ScanFinding) []Finding {
-				var out []Finding
+				out := make([]Finding, 0, len(fs))
 				for _, f := range fs {
-					out = append(out, Finding{
-						Host:     f.Host,
-						Port:     f.Port,
-						Proto:    f.Proto,
-						Service:  f.Service,
-						Version:  f.Version,
-						Banner:   f.Banner,
-						ProxyURI: f.Primary,
-						Proxies:  f.Proxies,
-					})
+					out = append(out, scanFindingToGui(f))
 				}
 				return out
 			}
@@ -1467,7 +1423,7 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 				}
 
 				st.pushFindings(targetFindings)
-				scanResults = append(scanResults, hostResult{host: target, findings: targetFindings})
+				scanResults = append(scanResults, hostScan{host: target, findings: targetFindings})
 				completed++
 				scanCountBind.Set(strconv.Itoa(completed))
 				if rotate {
@@ -1476,53 +1432,10 @@ func buildScannerTab(w fyne.Window, st *state) fyne.CanvasObject {
 			}
 
 			// ── Final open port summary ───────────────────────────────────
-			appendLog("[=] ─────────────── OPEN PORT SUMMARY ───────────────\n")
-			multiHost := len(scanResults) > 1
-			anyOpen := false
-			for _, hr := range scanResults {
-				if len(hr.findings) > 0 {
-					anyOpen = true
-					break
-				}
+			// Rendering lives in renderSummary (pure, unit-tested).
+			for _, line := range renderSummary(scanResults) {
+				appendLog(line + "\n")
 			}
-			if !anyOpen {
-				appendLog("    (no open ports found)\n")
-			} else {
-				for i, hr := range scanResults {
-					if multiHost {
-						if i > 0 {
-							appendLog("\n")
-						}
-						appendLog("HOST: " + hr.host + "\n")
-					}
-					for _, f := range hr.findings {
-						svc := f.Service
-						if f.Version != "" {
-							svc += "  " + f.Version
-						}
-						displayLine := fmt.Sprintf("%d/%s   open  %s", f.Port, f.Proto, svc)
-						if f.Host != "" {
-							displayLine = f.Host + "  " + displayLine
-						}
-						appendLog("  ► OPEN  " + displayLine + "\n")
-						if len(f.Proxies) > 0 {
-							for vi, lbl := range f.Proxies {
-								branch := "├─"
-								if vi == len(f.Proxies)-1 {
-									branch = "└─"
-								}
-								appendLog("      " + branch + " via " + lbl + "\n")
-							}
-						} else if f.ProxyURI != "" {
-							appendLog("      └─ via " + f.ProxyURI + "\n")
-						}
-					}
-					if multiHost && len(hr.findings) == 0 {
-						appendLog("    (no open ports)\n")
-					}
-				}
-			}
-			appendLog("[=] ─────────────────────────────────────────────────\n")
 			appendLog(fmt.Sprintf("[=] All scans complete, %d targets processed\n", completed))
 		}()
 	})
