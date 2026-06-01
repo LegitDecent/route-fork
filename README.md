@@ -188,7 +188,9 @@ Tests cover the SOCKS4/5 handshake and proxy-dial logic, the local relay
 (forward path, SOCKS4a hostname handling, failure behaviour), the port
 scanner (open/closed ports, per-connection proxy tracking, context
 cancellation), the full Go-native scan orchestration (`RunScan`/`RotateScan`)
-and region-block detection via an injected mock dialer, the service prober
+and region-block detection via an injected mock dialer, the GUI scan-controller
+glue (target assembly, scan-mode→quorum mapping, range-scan log suppression,
+summary rendering) as pure functions, the service prober
 (banner parsing plus live HTTP/TLS probes over `net.Pipe`), the quorum decision
 and burn-protection throttle, the proxy error classifier, the offline geo
 lookup, and pool management. All tests use local mock servers and need no
