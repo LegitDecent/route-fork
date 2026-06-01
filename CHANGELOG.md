@@ -4,11 +4,11 @@ All notable changes to Route Fork are documented here.
 
 ---
 
-## [Unreleased]
+## [v1.5.0] — 2026-05-31
 
 The built-in scanner becomes the default, gains service/version detection and
 offline geolocation, and the scan path is fully extracted and unified across the
-GUI and CLI. Developed on a branch; subject to local testing before release.
+GUI and CLI.
 
 ### Added
 - **Offline proxy geolocation** — each validated proxy is tagged with the
@@ -42,6 +42,20 @@ GUI and CLI. Developed on a branch; subject to local testing before release.
 - A CIDR + built-in scan no longer silently invoked nmap.
 
 ### Fixed
+- **CIDR scans now honour the scan mode.** A range used a separate quorum-of-one
+  sweep that ignored Confirmed/Paranoid and reported a port open on a single
+  proxy. Every host:port now runs through the same quorum grid, so the scan mode
+  applies to ranges and single hosts alike.
+- **A range scan no longer destroys its own proxy pool.** A down/filtered target
+  makes a working proxy return EOF / no-CONNECT-reply; this was misread as a dead
+  proxy and pruned the pool mid-sweep. Only proxies that are genuinely
+  unreachable / not-SOCKS / auth-rejected (`proxy.IsProxyDead`) are pruned now.
+- **Burn protection no longer starves a scan.** When every proxy was "resting" it
+  could report false "unreachable"; pacing is now best-effort and falls back to a
+  resting proxy rather than miss an open port.
+- **Large scans no longer freeze the UI.** Range / multi-target scans logged a
+  line per closed host:port (thousands of UI updates); they now log only open
+  ports, keeping the window and Stop button responsive.
 - The CIDR / many-port path spawned one goroutine per host:port up front (a
   `/16` × many ports could allocate millions); it now streams and caps live
   goroutines at the concurrency limit.
@@ -51,7 +65,10 @@ GUI and CLI. Developed on a branch; subject to local testing before release.
 ### Tests
 - New race-tested suites for `scanner.RunScan`, `scanner.RotateScan`,
   `scanner.ProbeRegion` / `scanner.DecideRegionBlock`, the service prober (live
-  HTTP/TLS over `net.Pipe`), and the `geo` package. `golangci-lint` clean.
+  HTTP/TLS over `net.Pipe`), the `proxy.IsProxyDead` classifier, the GUI
+  scan-controller glue (target assembly, scan-mode→quorum, range log
+  suppression, summary rendering), and the `geo` package. The `gui` package
+  gained its first tests. `golangci-lint` clean.
 
 ---
 
