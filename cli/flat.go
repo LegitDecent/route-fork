@@ -353,7 +353,8 @@ func execFlatNmap(ctx context.Context, cmd []string, proxyURI string) (results [
 			currentHost = m[1]
 		}
 		if flatOpenRE.MatchString(line) {
-			fmt.Println("  ► OPEN ", line)
+			// Live output to stderr; stdout is reserved for the result document.
+			fmt.Fprintln(os.Stderr, "  ► OPEN ", line)
 			var port int
 			var proto, service, version string
 			if m := flatDetailRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
@@ -371,7 +372,7 @@ func execFlatNmap(ctx context.Context, cmd []string, proxyURI string) (results [
 				Proxy:   proxyURI,
 			})
 		} else {
-			fmt.Println("  ", line)
+			fmt.Fprintln(os.Stderr, "  ", line)
 		}
 		if strings.Contains(line, "Host seems down") {
 			hostDown = true
@@ -397,18 +398,20 @@ func flatRunBuiltin(ctx context.Context, pl *pool.Pool, target, ports string,
 	fmt.Fprintf(os.Stderr, "[*] Built-in scan  %s  ports:%s  (need %d proxy/proxies to agree open)\n",
 		target, ports, confirm)
 
+	// Live "open" lines go to stderr so stdout stays a clean machine-readable
+	// document when -out - streams JSON/XML/CSV to stdout for piping.
 	printOpen := func(host string, port int, svc, ver, banner string) {
 		if svc == "" {
 			svc = "unknown"
 		}
-		fmt.Printf("  ► OPEN  %s:%d  [%s]", host, port, svc)
+		line := fmt.Sprintf("  ► OPEN  %s:%d  [%s]", host, port, svc)
 		if ver != "" {
-			fmt.Printf("  %s", ver)
+			line += "  " + ver
 		}
 		if banner != "" {
-			fmt.Printf("  %s", banner)
+			line += "  " + banner
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr, line)
 	}
 
 	var deadMu sync.Mutex

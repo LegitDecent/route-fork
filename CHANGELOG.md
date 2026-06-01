@@ -4,6 +4,26 @@ All notable changes to Route Fork are documented here.
 
 ---
 
+## [v1.5.1] — 2026-06-01
+
+### Fixed
+- **`-out -` now emits a clean document to stdout.** Live "► OPEN" / progress
+  lines were printed to stdout alongside the JSON/XML/CSV, so piping the result
+  to a parser was broken. Live output now goes to stderr (where all other status
+  lines already go), leaving stdout machine-readable. Found by the new
+  end-to-end CLI test.
+
+### Tests
+- **End-to-end CLI test (`test/e2e`)** — builds the real `rofk` binary and runs
+  it as a subprocess against a local mock TCP target through a recording mock
+  SOCKS5 proxy, asserting the JSON output reports the open port *and* that the
+  proxy observed the CONNECT. A companion test points the pool at a dead proxy
+  and asserts the port is reported closed, proving the result depends on the
+  proxy path (no direct-connection fallback / leak). Deterministic, offline,
+  timeout-bounded; passes under `-race`.
+
+---
+
 ## [v1.5.0] — 2026-05-31
 
 The built-in scanner becomes the default, gains service/version detection and
